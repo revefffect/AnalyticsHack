@@ -9,13 +9,13 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
         with:
           python-version: '3.12'
       - name: Run calculation and input tests
         run: python -m unittest discover -s tests -v
-      - name: Reconcile organizer coverage and April 2024 pressure
+      - name: Reconcile organizer coverage and verify demo results
         run: |
           python tools/audit_meteo.py data/raw/meteo_hack_dataset.zip > "$RUNNER_TEMP/audit.json"
           python - "$RUNNER_TEMP/audit.json" <<'PY'
@@ -24,7 +24,14 @@ jobs:
           from pathlib import Path
           audit = json.loads(Path(sys.argv[1]).read_text())
           assert not audit["reference_mismatches"], audit["reference_mismatches"]
+          assert audit["station_months_checked"] == audit["reference_months"] == 420
           assert audit["total_rows"] == 874560
+          january = audit["ame60_january_t_air"]
+          assert len(january["annual_means"]) == 13
+          assert round(january["annual_means"]["2010"], 2) == -15.20
+          assert round(january["mean_across_years"], 2) == -7.57
+          temperature = audit["kr1_2024"]["t_air"]["april"]
+          assert (temperature["days"], round(temperature["mean"], 2)) == (28, 7.61)
           pressure = audit["kr1_2024"]["pressure_hpa"]["april"]
           assert (pressure["days"], pressure["longest_gap"], pressure["mean"]) == (2, 28, None)
           PY
