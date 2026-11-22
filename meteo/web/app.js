@@ -1,6 +1,11 @@
 import {mountStationAtlas} from './station-atlas.js';
 import {humanAvatar, mountDatasetSettings} from './dataset-access.js';
+import {mountUIPrimitives, badgeHTML} from './ui-primitives.js';
+import {installFormControls} from './form-controls.js';
+import {mountObservationTools} from './vendor/dataset-dialog.js';
 
+mountUIPrimitives(document);
+installFormControls(document.body);
 const $ = (query, root = document) => root.querySelector(query);
 const $$ = (query, root = document) => [...root.querySelectorAll(query)];
 const content = $('#content');
@@ -14,10 +19,74 @@ const fmt = (value, unit = '') => value == null ? '—' : [number.format(value),
 const query = (values) => new URLSearchParams(values).toString();
 let token = sessionStorage.getItem('meteo-token') || '';
 let account, dict, datasets, selectedDataset, page, currentSlice, drawChart, streamCursor = 0;
-let atlasStationId, disposeStationAtlas;
+let atlasStationId, disposeStationAtlas, closeDatasetDialog;
+let closeColumnChooser, closeQualityRows;
+let navigationVersion = 0;
 const deepLink = new URLSearchParams(location.search);
+const searchInput = $('#workspace-search');
+const themeSelect = $('#workspace-theme');
+const menuButton = $('.menu-toggle');
+const narrowScreen = window.matchMedia('(max-width: 720px)');
+const paletteKey = 'meteo-workspace-theme';
+function applyTheme(value) {
+  const theme = ['forest', 'ink', 'violet'].includes(value) ? value : 'forest';
+  document.documentElement.dataset.workspaceTheme = theme;
+  themeSelect.value = theme;
+}
+let savedTheme;
+try { savedTheme = localStorage.getItem(paletteKey); } catch { /* File previews can disable storage. */ }
+applyTheme(savedTheme);
+themeSelect.addEventListener('change', () => {
+  applyTheme(themeSelect.value);
+  drawChart?.();
+  try { localStorage.setItem(paletteKey, themeSelect.value); } catch { /* Selection still applies to this page. */ }
+});
+
+function reflectMenu() {
+  const expanded = narrowScreen.matches ? document.body.classList.contains('is-nav-open') :
+    !document.body.classList.contains('is-nav-collapsed');
+  menuButton.setAttribute('aria-expanded', String(expanded));
+}
+menuButton.addEventListener('click', () => {
+  document.body.classList.toggle(narrowScreen.matches ? 'is-nav-open' : 'is-nav-collapsed');
+  reflectMenu();
+});
+narrowScreen.addEventListener('change', reflectMenu);
+reflectMenu();
+for (const entry of $$('#nav button')) {
+  entry.setAttribute('aria-label', entry.textContent.trim());
+  entry.title = entry.textContent.trim();
+}
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && document.body.classList.contains('is-nav-open')) {
+    document.body.classList.remove('is-nav-open');
+    reflectMenu(); menuButton.focus();
+  }
+  if (event.key === '/' && !event.ctrlKey && !event.metaKey && !event.altKey &&
+      !event.target.closest('input, select, textarea, [contenteditable], [role="dialog"]') &&
+      !$('#workspace-toolbar').hidden) {
+    event.preventDefault(); searchInput.focus();
+  }
+});
+function openSearch() {
+  if (page !== 'stations') {
+    atlasStationId = undefined;
+    navigate('stations').catch(error => message(error.message));
+  }
+}
+searchInput.addEventListener('input', openSearch);
+$('#workspace-search-form').addEventListener('submit', event => {
+  event.preventDefault(); openSearch(); searchInput.dispatchEvent(new Event('input'));
+});
 let columns = [['period', 'Период'], ['value', 'Значение'], ['coverage', 'Полнота'],
   ['deviation', 'Отклонение'], ['quality', 'Качество']];
+const availableColumns = [...columns, ['gaps', 'Длиннейший пропуск']];
+
+function closeObservationTools() {
+  closeColumnChooser?.();
+  closeQualityRows?.();
+  closeColumnChooser = closeQualityRows = undefined;
+}
 
 async function api(path, options = {}) {
   const headers = new Headers(options.headers || {});
@@ -57,22 +126,30 @@ async function signIn(value) {
   sessionStorage.setItem('meteo-token', token);
   dict = await api('/api/dictionary');
   const views = await api('/api/views');
-  if (views.default?.length) columns = views.default;
+  columns = views.default?.length ? views.default : availableColumns.slice(0, 5);
   $('#login').hidden = $('#login-error').hidden = true;
-  $('#workspace').hidden = $('#nav').hidden = $('#identity').hidden = false;
+  $('#workspace-toolbar').hidden = $('#workspace').hidden = $('#nav').hidden = $('#identity').hidden = false;
+  menuButton.disabled = false;
   $('#user-avatar').replaceChildren(humanAvatar(account.name));
   $('#user-name').textContent = account.name;
   $('#role').textContent = account.role === 'research' ? 'Исследователь' : 'Бизнес';
   $$('[data-research]').forEach(el => { el.hidden = account.role !== 'research'; });
-  if (deepLink.get('page') === 'stations') {
-    atlasStationId = deepLink.get('station');
-    await navigate('stations');
-  } else {
-    await navigate('analysis');
-  }
+  const requested = deepLink.get('page');
+  const allowed = $$('#nav button').find(entry => entry.dataset.page === requested && !entry.hidden);
+  const hasAnalysisSelection = ['dataset', 'parameter', 'start', 'station'].some(key => deepLink.has(key));
+  atlasStationId = requested === 'stations' ? deepLink.get('station') : undefined;
+  await navigate(allowed?.dataset.page || (hasAnalysisSelection ? 'analysis' : 'stations'));
 }
 
 function signOut() {
+  ++navigationVersion;
+  clearInterval(satelliteRefresh);
+  closeObservationTools();
+  closeDatasetDialog?.(); closeDatasetDialog = undefined;
+  searchInput.value = '';
+  menuButton.disabled = true;
+  document.body.classList.remove('is-nav-open');
+  reflectMenu();
   disposeStationAtlas?.();
   disposeStationAtlas = undefined;
   atlasStationId = selectedDataset = page = undefined;
@@ -80,21 +157,28 @@ function signOut() {
   token = '';
   sessionStorage.removeItem('meteo-token');
   $('#login').hidden = false;
-  $('#workspace').hidden = $('#nav').hidden = $('#identity').hidden = true;
+  $('#workspace-toolbar').hidden = $('#workspace').hidden = $('#nav').hidden = $('#identity').hidden = true;
 }
 
 async function navigate(next, selection) {
+  ++navigationVersion;
+  clearInterval(satelliteRefresh);
+  closeObservationTools();
+  closeDatasetDialog?.(); closeDatasetDialog = undefined;
+  document.body.classList.remove('is-nav-open'); reflectMenu();
+  if (next !== 'stations') searchInput.value = '';
   disposeStationAtlas?.();
   disposeStationAtlas = undefined;
   page = next;
+  document.querySelector('#workspace').dataset.page = next;
   currentSlice = undefined;
   drawChart = undefined;
   message();
   actions.replaceChildren();
   content.innerHTML = '<p class="muted">Загрузка…</p>';
-  $('#heading').textContent = {analysis: 'Наблюдения', stations: 'Карта станций', import: 'Импорт данных', catalog: 'Каталог наборов',
+  $('#heading').textContent = {analysis: 'Наблюдения', stations: 'Метеостанции заповедника', import: 'Импорт данных', catalog: 'Каталог наборов',
     reports: 'Отчёты', alerts: 'Уведомления', satellite: 'Спутниковые данные'}[page];
-  $('#eyebrow').textContent = account.role === 'research' ? 'Кабинет исследователя' : 'Кабинет бизнеса';
+  $('#eyebrow').textContent = 'Центрально-Лесной биосферный заповедник';
   $$('nav button').forEach(el => { el.setAttribute('aria-current', el.dataset.page === page ? 'page' : 'false'); });
   await {analysis, stations: stationPage, import: importPage, catalog: catalogPage, reports: reportsPage, alerts: alertsPage, satellite: satellitePage}[page](selection);
 }
@@ -107,7 +191,7 @@ async function stationPage() {
   const [local, references] = await Promise.all([api('/api/stations'), api('/api/stations/references')]);
   if (!host.isConnected) return;
   disposeStationAtlas = mountStationAtlas(host, [...local, ...references], {
-    initialStation: atlasStationId,
+    initialStation: atlasStationId, searchInput,
     onSelectStation: id => { atlasStationId = id; },
     onOpenDataset(dataset, station) {
       atlasStationId = station;
@@ -216,14 +300,16 @@ const qcLink = row => '<button class="text" data-quality="' + escape(row.start.s
 
 function table(data, configurable = false) {
   const available = {
-    period: qcLink, value: row => fmt(row.value, data.unit),
-    coverage: showCoverage, deviation: row => fmt(row.deviation, data.unit), quality: issue,
+    period: row => configurable ? qcLink(row) : escape(row.start === row.end ? row.start : row.start + ' — ' + row.end),
+    value: row => escape(fmt(row.value, data.unit)),
+    coverage: showCoverage, deviation: row => escape(fmt(row.deviation, data.unit)),
+    quality: row => badgeHTML(issue(row), {tone: row.reason ? 'danger' : row.partial ? 'warning' : 'success'}),
     gaps: row => row.longest_gap + ' сут.',
   };
   const shown = configurable ? columns : columns.filter(([key]) => key !== 'quality');
   return '<div class="table-wrap"><table><thead><tr>' + shown.map(([, label]) => '<th scope="col">' + escape(label) +
     '</th>').join('') + '</tr></thead><tbody>' + data.points.map(row => '<tr>' + shown.map(([key]) => '<td>' +
-    (key === 'period' ? available[key](row) : escape(available[key]?.(row))) + '</td>').join('') + '</tr>').join('') +
+    (Object.hasOwn(available, key) ? available[key](row) : '') + '</td>').join('') + '</tr>').join('') +
     '</tbody></table></div>';
 }
 
@@ -232,6 +318,10 @@ function displayChart(canvas, points) {
   const width = canvas.clientWidth;
   const height = canvas.clientHeight;
   if (!width || !height) return;
+  const palette = getComputedStyle(document.documentElement);
+  const line = palette.getPropertyValue('--primary').trim();
+  const border = palette.getPropertyValue('--border').trim();
+  const text = palette.getPropertyValue('--muted-foreground').trim();
   const ratio = devicePixelRatio || 1;
   canvas.width = width * ratio; canvas.height = height * ratio;
   context.scale(ratio, ratio);
@@ -245,11 +335,11 @@ function displayChart(canvas, points) {
   for (let index = 0; index <= 4; index++) {
     const value = min + span * index / 4;
     const lineY = y(value);
-    context.strokeStyle = '#d8e1d7'; context.lineWidth = 1; context.beginPath(); context.moveTo(left, lineY);
+    context.strokeStyle = border; context.lineWidth = 1; context.beginPath(); context.moveTo(left, lineY);
     context.lineTo(right, lineY); context.stroke();
-    context.fillStyle = '#526761'; context.fillText(fmt(value), left - 8, lineY + 3);
+    context.fillStyle = text; context.fillText(fmt(value), left - 8, lineY + 3);
   }
-  context.strokeStyle = '#23634f'; context.lineWidth = 2; context.beginPath();
+  context.strokeStyle = line; context.lineWidth = 2; context.beginPath();
   let open = false;
   points.forEach((row, index) => {
     if (row.value === null) { open = false; return; }
@@ -258,14 +348,14 @@ function displayChart(canvas, points) {
   });
   context.stroke();
   if (points.length <= 42) {
-    context.fillStyle = '#23634f';
+    context.fillStyle = line;
     points.forEach((row, index) => {
       if (row.value === null) return;
       context.beginPath(); context.arc(x(index), y(row.value), 3.1, 0, Math.PI * 2); context.fill();
     });
   }
   if (points.length) {
-    context.fillStyle = '#526761'; context.textAlign = 'left'; context.fillText(points[0].start, left, height - 11);
+    context.fillStyle = text; context.textAlign = 'left'; context.fillText(points[0].start, left, height - 11);
     if (points.length > 1) {
       context.textAlign = 'right'; context.fillText(points.at(-1).end, right, height - 11);
     }
@@ -282,6 +372,7 @@ function displayChart(canvas, points) {
 }
 
 function renderSlice(data) {
+  closeObservationTools();
   const january = data.monthly_baseline[1];
   const point2010 = data.points.find(row => row.start === '2010-01-01' && row.value !== null);
   const headline = point2010 ? point2010.value : data.points.length === 1 ? data.points[0].value : data.summary.average;
@@ -305,9 +396,7 @@ function renderSlice(data) {
     </section>
     <div class="layout">
       <section class="panel"><h2>Таблица наблюдений</h2><div id="series-table">${table(data, true)}</div>
-        <details><summary>Настроить столбцы</summary><p class="muted">Каждая строка — название поля и подпись через знак =. Доступные поля: period, value, coverage, deviation, quality, gaps.</p>
-        <form id="view-form"><label>Вид таблицы<input name="columns" value="${escape(columns.map(x => x.join('=')).join(', '))}"></label>
-        <button>Сохранить вид</button></form></details>
+        <details><summary>Настроить столбцы</summary><div id="column-tools"></div></details>
       </section>
       <section class="panel" id="quality"><h2>Контроль качества</h2><p>Выберите период или дату в таблице, чтобы открыть исходные строки.</p>
         <p class="muted">Длиннейшие серии неполных суток</p>
@@ -343,34 +432,42 @@ function renderSlice(data) {
     await api('/api/datasets/' + data.dataset + '/visibility?shared=' + (selected.visibility !== 'shared'), {method: 'PUT'});
     await navigate('analysis');
   });
-  bind($('#view-form'), 'submit', async (event) => {
-    const entries = event.currentTarget.columns.value.split(',').map(value => value.trim().split('='));
-    const keys = new Set(['period', 'value', 'coverage', 'deviation', 'quality', 'gaps']);
-    if (entries.some(([key, label]) => !keys.has(key) || !label)) throw new Error('Проверьте названия и подписи полей.');
-    await api('/api/views/default', {method: 'PUT', json: {columns: entries}});
-    columns = entries; $('#series-table').innerHTML = table(data, true); bindQuality();
+  const chooserHost = $('#column-tools');
+  closeColumnChooser = mountObservationTools(chooserHost, 'columns', {columns, available: availableColumns,
+    async onSave(entries) {
+      await api('/api/views/default', {method: 'PUT', json: {columns: entries}});
+      if (!chooserHost.isConnected) return;
+      columns = entries;
+      const seriesTable = $('#series-table');
+      seriesTable.innerHTML = table(data, true);
+      $$('[data-quality]', seriesTable).forEach(button => bind(button, 'click', () => loadQuality(button.dataset.quality)));
+    },
   });
 }
 
+let qualityRequest = 0;
 async function loadQuality(day) {
   if (!currentSlice) return;
+  const request = ++qualityRequest;
+  const slice = currentSlice;
   const {version, filters, results} = currentSlice;
   const row = results.points.find(point => point.start === day);
   const response = await api('/api/datasets/' + version + '/quality?' +
     query({station: filters.station, parameter: filters.parameter, day}));
   const panel = $('#quality');
-  if (!panel) return;
+  if (!panel || currentSlice !== slice || request !== qualityRequest) return;
+  closeQualityRows?.();
   panel.innerHTML = `<h2>Контроль качества</h2>
     ${row ? '<p>' + showCoverage(row) + ' · серия до ' + row.longest_gap + ' сут.</p>' : ''}
     <label>Дата исходных наблюдений<input type="date" id="quality-date" value="${escape(day)}"></label>
     <p>${response.day.valid_slots} / ${response.day.expected_slots} ${escape(response.day.slot_unit)} · минимум ${response.day.minimum_slots}</p>
-    <p class="muted">${escape(dict.flags[response.day.reason] || 'Достаточное покрытие')}</p>
-    <p>${escape(Object.entries(row?.flags || response.day.flags).map(([key, count]) => key + ': ' + count).join(' · '))}</p>
-    <div class="table-wrap"><table><thead><tr><th>Время / источник</th><th>Значение / QC</th></tr></thead><tbody>
-    ${response.rows.map(r => '<tr><td>' + escape(r.original_stamp) + '<br><small>' + escape(r.source_file) + ':' +
-      r.source_row + ' · ' + escape(r.zone === 'unknown' ? 'пояс неизвестен' : r.zone) + '</small></td><td>' +
-      fmt(r.value, results.unit) + '<br><small>' + (r.received_at ? 'Принято: ' + escape(r.received_at) + '<br>' : '') + escape(r.reasons.map(v => v.label).join(', ')) + '</small></td></tr>').join('')}
-    </tbody></table></div>`;
+    <p>${badgeHTML(dict.flags[response.day.reason] || response.day.reason || 'Достаточное покрытие',
+      {tone: response.day.reason ? 'warning' : 'success'})}</p>
+    <div class="qc-flags">${Object.entries(response.day.flags).map(([key, count]) => badgeHTML(
+      (dict.flags[key] || dict.flags[key.split(':').at(-1)] || key) + ' · ' + count, {tone: 'warning'})).join('')}</div>
+    <div id="quality-rows"></div>`;
+  closeQualityRows = mountObservationTools($('#quality-rows'), 'quality',
+    {rows: response.rows, formatValue: value => fmt(value, results.unit)});
   bind($('#quality-date'), 'change', e => loadQuality(e.currentTarget.value));
 }
 
@@ -477,23 +574,26 @@ async function catalogPage() {
       ${card.id === 'open-meteo' && account.role === 'research' ? '<button id="external">Подключить Open-Meteo</button>' : ''}
       ${card.stations ? '<div class="actions"><button data-open="' + escape(card.id) + '">Открыть</button><button data-connect="' +
         escape(card.id) + '">' + (card.connected ? 'Подключён' : 'Подключить') + '</button></div>' : ''}
-      ${card.can_edit || card.can_manage_access ? '<button type="button" aria-expanded="false" data-settings="' +
+      ${card.can_edit || card.can_manage_access ? '<button type="button" aria-haspopup="dialog" data-settings="' +
         escape(card.id) + '">' + (card.can_manage_access ? 'Настройки и доступ' : 'Редактировать набор') +
-        '</button><div class="dataset-settings-host" hidden></div>' : ''}
+        '</button>' : ''}
       </article>`).join('') || '<p>Ничего не найдено.</p>';
-    $$('[data-settings]', list).forEach(button => bind(button, 'click', () => {
-      const host = button.nextElementSibling;
-      host.hidden = !host.hidden;
-      button.setAttribute('aria-expanded', String(!host.hidden));
-      if (host.hidden) return;
+    $$('[data-settings]', list).forEach(button => bind(button, 'click', async () => {
       const card = cards.find(item => item.id === button.dataset.settings);
-      return mountDatasetSettings(host, card, api, {onRename(name) {
-        card.name = name;
-        $('h3', button.closest('article')).textContent = name;
-      }, onVisibility(visibility) {
-        card.visibility = visibility;
-        const label = $('.dataset-visibility', button.closest('article'));
-        if (label) label.textContent = visibility === 'shared' ? 'Общее чтение' : 'По приглашению';
+      const {openDatasetDialog} = await import('./vendor/dataset-dialog.js');
+      if (!button.isConnected) return;
+      closeDatasetDialog?.();
+      closeDatasetDialog = openDatasetDialog({trigger: button, title: card.name, mount(host) {
+        mountDatasetSettings(host, card, api, {onRename(name) {
+          card.name = name;
+          $('h3', button.closest('article')).textContent = name;
+          const title = host.closest('[role="dialog"]')?.querySelector('.access-dialog-dataset');
+          if (title) title.textContent = ' · ' + name;
+        }, onVisibility(visibility) {
+          card.visibility = visibility;
+          const label = $('.dataset-visibility', button.closest('article'));
+          if (label) label.textContent = visibility === 'shared' ? 'Общее чтение' : 'По приглашению';
+        }});
       }});
     }));
     $$('[data-open]').forEach(button => bind(button, 'click', () => {
@@ -522,12 +622,17 @@ async function catalogPage() {
 }
 
 async function reportsPage() {
+  const visit = navigationVersion;
   const reports = await api('/api/reports');
+  if (visit !== navigationVersion) return;
   content.innerHTML = `<section class="panel no-print"><h2>Сохранённые отчёты</h2>
     ${reports.map(r => '<p><button class="text" data-report="' + escape(r.id) + '">' + escape(r.title) +
       '</button> · <small>' + escape(r.created_at) + '</small></p>').join('') ||
       '<p>Выберите срез в наблюдениях и нажмите «Создать отчёт».</p>'}</section><div id="report"></div>`;
-  $$('[data-report]').forEach(button => bind(button, 'click', async () => renderReport(await api('/api/reports/' + button.dataset.report))));
+  $$('[data-report]').forEach(button => bind(button, 'click', async () => {
+    const report = await api('/api/reports/' + button.dataset.report);
+    if (visit === navigationVersion) renderReport(report);
+  }));
 }
 
 function renderReport(data) {
@@ -540,17 +645,21 @@ function renderReport(data) {
     ${data.coverage.valid_days} из ${data.coverage.days}.</p>
     <p class="break">Источник ${escape(data.metadata?.provider || data.source)} · версия <code>${escape(data.dataset)}</code></p>
     <p>${escape(data.method)} · QC ${escape(data.qc)}. Пропуски остаются пустыми.</p>
-    <canvas class="chart" aria-label="График отчёта"></canvas>${table(data).replaceAll(/<button class="text" data-quality="[^"]*">/g, '<span>').replaceAll('</button>', '</span>')}</section>`;
+    <canvas class="chart" aria-label="График отчёта"></canvas>${table(data)}</section>`;
   const canvas = $('.chart', $('#report'));
   drawChart = () => displayChart(canvas, data.points); drawChart();
 }
 
 async function alertsPage() {
+  const visit = navigationVersion;
   const data = await api('/api/alerts');
+  if (visit !== navigationVersion) return;
   const events = {active: 'Порог превышен', recovered: 'Восстановление', stale: 'Данные устарели', insufficient: 'Недостаточно данных', normal: 'В норме'};
+  const tones = {active: 'danger', recovered: 'success', stale: 'warning', insufficient: 'warning', normal: 'success'};
+  const eventBadge = state => badgeHTML(events[state] || state, {tone: tones[state] || 'neutral'});
   content.innerHTML = `<section class="panel"><h2>Состояние потока</h2>
     <p>${data.feed ? 'Последний приём: ' + escape(data.feed.last_received) + ' · ' + escape(data.feed.mode) : 'Поток ещё не поступал.'}</p>
-    <p>${data.rules.map(rule => escape(rule.body.name) + ' · ' + escape(events[rule.state] || rule.state)).join('<br>') || 'Нет правил для кабинета.'}</p>
+    <div class="rule-status-list">${data.rules.map(rule => '<p>' + escape(rule.body.name) + ' ' + eventBadge(rule.state) + '</p>').join('') || 'Нет правил для кабинета.'}</div>
     <button id="refresh">Обновить</button> ${data.demo && account.role === 'research' ? '<button class="primary" id="replay">Воспроизвести архив</button>' : ''}
     ${account.role === 'research' ? `<details><summary>Создать правило</summary><form id="rule-form" class="filters">
       <label>Название<input name="name" required value="Высокая температура"></label>
@@ -562,8 +671,8 @@ async function alertsPage() {
       <label>Получатель<input name="recipient" required value="business"></label>
       <label>Устаревание, мин<input name="stale_minutes" type="number" min="1" value="30" required></label>
       <button class="primary">Сохранить</button></form></details>` : ''}</section>
-    <section class="panel"><h2>История событий</h2>${data.events.map(event => '<p><span class="tag warn">' +
-      escape(events[event.state] || event.state) + '</span> ' + escape(event.body.name) + ' · ' + escape(event.happened_at) +
+    <section class="panel"><h2>История событий</h2>${data.events.map(event => '<p class="event-row">' +
+      eventBadge(event.state) + ' ' + escape(event.body.name) + ' · ' + escape(event.happened_at) +
       ' · ' + fmt(event.body.value, event.body.unit) + ' · ' + escape(event.delivery) +
       (event.body.url ? ' · <a href="' + escape(event.body.url) + '">График</a>' : '') + '</p>').join('') ||
       '<p>Событий пока нет.</p>'}</section>`;
@@ -596,7 +705,9 @@ api('/health').then(config => {
 let satelliteDate = '';
 let satelliteRefresh;
 async function satellitePage() {
+  const visit = navigationVersion;
   const config = await api('/api/satellite');
+  if (visit !== navigationVersion) return;
   const yesterday = new Date(Date.parse(config.today) - 86400000).toISOString().slice(0, 10);
   content.innerHTML = `<form class="panel" id="satellite-form"><div class="filters">
     <label class="wide">Область<select name="area">${options(Object.entries(config.areas).map(([k, v]) => [k, v.name]), 'reserve')}</select></label>
@@ -605,7 +716,7 @@ async function satellitePage() {
      value="${escape(satelliteDate >= '2012-01-01' && satelliteDate <= config.today ? satelliteDate : config.today)}"></label>
     <button class="primary">Обновить</button></div><div class="actions">
       <button type="button" id="sat-today">Сегодня UTC</button><button type="button" id="sat-yesterday">Вчера UTC</button>
-      <label class="check"><input type="checkbox" name="auto" checked>Обновлять каждые 5 минут</label>
+      <label class="check"><input type="checkbox" role="switch" name="auto" checked>Обновлять каждые 5 минут</label>
     </div></form><div id="satellite-result"></div>`;
   const form = $('#satellite-form');
   const render = async () => {

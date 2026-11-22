@@ -1,6 +1,15 @@
+import {mountAtlasTabs} from './vendor/dataset-dialog.js';
+import {renderLocalLandmarks} from './atlas-geography.js';
+import {stationDataTable} from './station-table.js';
+
 // The reserve bounds describe a monitoring area. Individual instruments can share it
 // until a station supplies its own coordinates.
 const reserveBounds = [32.70, 56.30, 33.15, 56.56];
+const registryLabels = {
+  KR1: ['Кр1', 'Сокол М1 · поляна'],
+  KR2: ['Кр2', 'Сокол М1 · поле'],
+  AME60: ['АМЕ-60', 'Архив наблюдений'],
+};
 const landscapes = ['reserve', 'clearing', 'field', 'wet-forest', 'dry-forest'];
 const avatarHabitats = {AME60: 'reserve', KR1: 'clearing', KR2: 'field', 'RU-Fyo': 'wet-forest', 'RU-Fy2': 'dry-forest'};
 const svgNamespace = 'http://www.w3.org/2000/svg';
@@ -10,7 +19,7 @@ function stationAvatar(station) {
   // Hash the stable ID independently of catalog ordering or future additions.
   let hash = 0;
   for (const char of station.id) hash = (Math.imul(hash, 31) + char.codePointAt(0)) >>> 0;
-  const group = avatarHabitats[code] || landscapes[Math.floor(hash / 3) % landscapes.length];
+  const group = Object.hasOwn(avatarHabitats, code) ? avatarHabitats[code] : landscapes[Math.floor(hash / 3) % landscapes.length];
   const graphic = document.createElementNS(svgNamespace, 'svg');
   graphic.classList.add('atlas-avatar');
   graphic.setAttribute('viewBox', '0 0 600 240');
@@ -98,10 +107,14 @@ function makeMap(stations, choose) {
   viewport.setAttribute('aria-label', 'Географическая карта. Клавиши со стрелками перемещают карту, плюс и минус меняют масштаб.');
   const grid = el('div', 'atlas-grid');
   const tiles = el('div', 'atlas-tiles');
+  const landmarks = el('div', 'atlas-landmarks');
+  landmarks.setAttribute('aria-hidden', 'true');
   const overlay = el('div', 'atlas-overlay');
   grid.setAttribute('aria-hidden', 'true');
   tiles.setAttribute('aria-hidden', 'true');
   const control = el('div', 'atlas-controls');
+  const scale = el('div', 'atlas-scale');
+  scale.setAttribute('aria-label', 'Масштаб карты');
   const [west, south, east, north] = reserveBounds;
   const area = stations.filter(station => !hasPoint(station) && station.location_kind === 'area');
   const points = stations.filter(hasPoint);
@@ -112,7 +125,7 @@ function makeMap(stations, choose) {
   attribution.href = 'https://www.openstreetmap.org/copyright';
   attribution.target = '_blank';
   attribution.rel = 'noopener';
-  const status = el('div', 'atlas-map-status', 'Координатная сетка');
+  const status = el('div', 'atlas-map-status', 'Координатная схема');
   const menu = el('div', 'atlas-map-menu');
   menu.hidden = true;
   const group = button('atlas-area', '', () => toggle(!open));
@@ -169,6 +182,12 @@ function makeMap(stations, choose) {
     const [cx, cy] = project(...focus, zoom);
     const x0 = cx - w / 2, y0 = cy - h / 2;
     const size = 2 ** zoom;
+    const metersPerPixel = Math.cos(focus[1] * Math.PI / 180) * 40075016.7 / (256 * size);
+    const target = 100 * metersPerPixel;
+    const power = 10 ** Math.floor(Math.log10(target));
+    const length = ([5, 2, 1].find(unit => unit * power <= target) || 1) * power;
+    scale.style.width = Math.round(length / metersPerPixel) + 'px';
+    scale.textContent = length >= 1000 ? numbers.format(length / 1000) + ' км' : length + ' м';
     const wanted = new Set();
     for (let y = Math.max(0, Math.floor(y0 / 256)); y <= Math.min(size - 1, Math.floor((y0 + h) / 256)); y++) {
       for (let x = Math.floor(x0 / 256); x <= Math.floor((x0 + w) / 256); x++) {
@@ -208,6 +227,14 @@ function makeMap(stations, choose) {
       const [left, top] = project(west, north, zoom), [right, bottom] = project(east, south, zoom);
       Object.assign(group.style, {left: left - x0 + 'px', top: top - y0 + 'px', width: right - left + 'px', height: bottom - top + 'px'});
     }
+    const occupied = [
+      {left: w - 55, top: 4, right: w, bottom: 123},
+      {left: 0, top: h - 47, right: 126, bottom: h},
+    ];
+    if (area.length) {
+      const [groupX, groupY] = project(center[0], south + (north - south) * 0.08, zoom);
+      occupied.push({left: groupX - x0 - 58, right: groupX - x0 + 58, top: groupY - y0 - 18, bottom: groupY - y0 + 18});
+    }
     for (const {station, marker} of markers) {
       const [x, y] = project(station.longitude, station.latitude, zoom);
       marker.style.left = x - x0 + 'px';
@@ -219,13 +246,22 @@ function makeMap(stations, choose) {
         const [nx, ny] = project(other.longitude, other.latitude, zoom);
         return Math.abs(x - nx) < 115 && Math.abs(y - ny) < 46;
       });
-      marker.classList.toggle('atlas-label-left', neighbors.some(other =>
-        other.longitude > station.longitude || other.longitude === station.longitude && other.id > station.id));
+      const facesLeft = neighbors.some(other =>
+        other.longitude > station.longitude || other.longitude === station.longitude && other.id > station.id);
+      marker.classList.toggle('atlas-label-left', facesLeft);
+      occupied.push({left: x - x0 - (facesLeft ? 80 : 8), right: x - x0 + (facesLeft ? 8 : 80),
+        top: y - y0 - 15, bottom: y - y0 + 15});
     }
+    renderLocalLandmarks(landmarks, (lon, lat) => {
+      const [x, y] = project(lon, lat, zoom);
+      return [x - x0, y - y0];
+    }, w, h, occupied);
   }
 
   function syncStatus() {
-    status.hidden = Boolean(tiles.querySelector('[data-loaded]'));
+    const hasTiles = Boolean(tiles.querySelector('[data-loaded]'));
+    status.hidden = landmarks.hidden = hasTiles;
+    attribution.hidden = !hasTiles;
   }
   function moveBy(x, y) {
     const [cx, cy] = project(...focus, zoom);
@@ -262,7 +298,7 @@ function makeMap(stations, choose) {
     drag = [event.clientX, event.clientY];
   });
   viewport.addEventListener('lostpointercapture', () => { drag = null; });
-  viewport.append(grid, tiles, overlay, control, menu, status, attribution);
+  viewport.append(grid, tiles, landmarks, overlay, control, menu, scale, status, attribution);
   map.append(viewport);
   const observer = new ResizeObserver(render);
   observer.observe(viewport);
@@ -277,7 +313,102 @@ function makeMap(stations, choose) {
   }, dispose: () => observer.disconnect()};
 }
 
-export function mountStationAtlas(root, stations, {onOpenDataset, initialStation, onSelectStation, loadPhoto, onUploadPhoto} = {}) {
+const siteNames = {
+  AME60: 'Урочище Красное', KR1: 'Поляна', KR2: 'Поле',
+  'RU-Fyo': 'Заболоченный ельник', 'RU-Fy2': 'Сухой ельник',
+};
+
+function searchable(value) {
+  return String(value || '').toLocaleLowerCase('ru').replaceAll('ё', 'е')
+    .replace(/[‐‑‒–—]/g, '-');
+}
+
+function stationRegister(panel, stations, open, input) {
+  const toolbar = el('div', 'atlas-register-heading');
+  const resultCount = el('p', 'atlas-register-count');
+  resultCount.setAttribute('role', 'status');
+  toolbar.append(resultCount);
+  const {container: wrapper, head, body} = stationDataTable({
+    label: 'Реестр метеостанций', className: 'atlas-register-table', columns: ['№', 'Станция', 'Площадка', 'Записей в наборах'],
+  });
+  const sortHead = head.lastElementChild;
+  const sort = button('atlas-sort', 'Записей в наборах', () => {
+    descending = !descending;
+    refresh();
+  });
+  sortHead.replaceChildren(sort);
+  const empty = el('div', 'atlas-no-results');
+  empty.append(el('p', '', 'Станции не найдены'));
+  if (input) {
+    empty.append(button('atlas-clear-search', 'Сбросить поиск', () => {
+      input.value = '';
+      input.dispatchEvent(new Event('input', {bubbles: true}));
+      input.focus();
+    }));
+  }
+  panel.append(toolbar, wrapper, empty);
+  const collator = new Intl.Collator('ru', {numeric: true});
+  const rows = stations.map(station => {
+    const code = station.code || station.id;
+    const site = Object.hasOwn(siteNames, code) ? siteNames[code] : station.location_label || '—';
+    const datasets = station.datasets || [];
+    const count = datasets.length ? datasets.reduce((sum, item) => sum + (Number(item.rows) || 0), 0) : null;
+    const text = searchable([station.name, code, site, station.description, station.location_label,
+      ...datasets.map(d => d.name), ...(station.publications || []).map(p => p.name)].join(' '));
+    return {station, site, code, count, text};
+  });
+  const maxCount = rows.reduce((max, row) => Math.max(max, row.count || 0), 1);
+  let descending = true;
+
+  function refresh() {
+    const terms = searchable(input?.value).split(/\s+/).filter(Boolean);
+    const matching = rows.filter(row => terms.every(term => row.text.includes(term)));
+    matching.sort((a, b) => {
+      if ((a.count === null) !== (b.count === null)) return a.count === null ? 1 : -1;
+      return (descending ? b.count - a.count : a.count - b.count) || collator.compare(a.code, b.code);
+    });
+    resultCount.textContent = terms.length ? 'Найдено ' + matching.length + ' из ' + rows.length :
+      counted(rows.length, 'станция', 'станции', 'станций');
+    sortHead.setAttribute('aria-sort', descending ? 'descending' : 'ascending');
+    sort.title = descending ? 'По убыванию. Изменить порядок' : 'По возрастанию. Изменить порядок';
+    body.replaceChildren();
+    matching.forEach(({station, site, code, count}, index) => {
+      const row = body.insertRow();
+      row.dataset.slot = 'table-row';
+      row.insertCell().textContent = String(index + 1);
+      const identify = button('atlas-name-link', '', () => open(station.id));
+      identify.setAttribute('aria-label', 'Открыть станцию ' + (station.name || code));
+      const name = el('span', 'atlas-register-name');
+      name.append(el('strong', '', station.name || code));
+      const source = station.location_kind === 'reference' ? 'FLUXNET' : 'Наблюдения';
+      name.append(el('small', '', code === station.name ? source : code + ' · ' + source));
+      identify.append(stationAvatar(station), name);
+      row.insertCell().append(identify);
+      row.insertCell().textContent = site;
+      const measure = el('div', 'atlas-register-measure');
+      measure.append(el('span', 'atlas-count', count === null ? '—' : numbers.format(count)));
+      if (count !== null) {
+        const track = el('span', 'atlas-count-bar');
+        track.setAttribute('aria-hidden', 'true');
+        const fill = el('span');
+        fill.style.width = (100 * count / maxCount) + '%';
+        track.append(fill);
+        measure.append(track);
+      }
+      row.insertCell().append(measure);
+      for (const cell of row.cells) cell.dataset.slot = 'table-cell';
+      row.addEventListener('click', event => {
+        if (!identify.contains(event.target)) open(station.id);
+      });
+    });
+    empty.hidden = matching.length > 0;
+    wrapper.hidden = !matching.length;
+  }
+  refresh();
+  return refresh;
+}
+
+export function mountStationAtlas(root, stations, {onOpenDataset, initialStation, onSelectStation, loadPhoto, onUploadPhoto, searchInput} = {}) {
   const atlas = el('section', 'station-atlas');
   root.replaceChildren(atlas);
   if (!stations.length) {
@@ -286,30 +417,85 @@ export function mountStationAtlas(root, stations, {onOpenDataset, initialStation
   }
   const catalog = el('section', 'atlas-panel atlas-catalog');
   const dossier = el('article', 'atlas-panel atlas-dossier');
+  const registry = el('div', 'atlas-registry');
   const header = el('div', 'atlas-panel-heading');
-  header.append(el('h2', '', 'Район наблюдений'), el('span', 'atlas-total', counted(stations.length, 'станция', 'станции', 'станций')));
+  header.append(el('h2', '', 'Станции'), el('span', 'atlas-total', stations.length));
   const list = el('div', 'atlas-stations');
-  list.setAttribute('aria-label', 'Выбор станции');
+  const mobileLabel = el('label', 'atlas-station-selector', 'Станция');
+  const selector = el('select');
+  selector.addEventListener('change', () => choose(selector.value));
+  mobileLabel.append(selector);
   const spatial = makeMap(stations, choose);
   const stationButtons = new Map();
   let selected, previewRequest, previewURL;
-  const hasArea = stations.some(station => station.location_kind === 'area' && !hasPoint(station));
-  const mapNote = hasArea ? 'Контур обозначает район наблюдений. Точки отображаются для станций с известными координатами.' :
-    'На карте показаны станции с опубликованными координатами.';
-  const note = el('p', 'atlas-map-note', mapNote);
-  for (const station of stations) {
-    const btn = button('atlas-station', '', () => choose(station.id));
-    const detail = el('span', 'atlas-station-text');
-    const summary = station.location_kind === 'reference' ? 'Опорная станция' : counted(station.datasets?.length || 0, 'набор данных', 'набора данных', 'наборов данных');
-    detail.append(el('strong', '', station.name || station.id), el('small', '', summary));
-    const glyph = el('span', 'atlas-radio');
-    glyph.setAttribute('aria-hidden', 'true');
-    btn.append(glyph, detail);
-    list.append(btn);
-    stationButtons.set(station.id, btn);
+
+  for (const [label, entries] of [
+    ['Станции наблюдений', stations.filter(s => s.location_kind !== 'reference')],
+    ['Опорные станции', stations.filter(s => s.location_kind === 'reference')],
+  ]) {
+    if (!entries.length) continue;
+    const group = el('div', 'atlas-registry-group');
+    group.setAttribute('role', 'group');
+    group.setAttribute('aria-label', label);
+    const options = el('optgroup');
+    options.label = label;
+    group.append(el('h3', '', label));
+    for (const station of entries) {
+      const btn = button('atlas-station', '', () => choose(station.id));
+      const detail = el('span', 'atlas-station-text');
+      const code = station.code || station.id;
+      const name = station.name || code;
+      const [title, subtitle] = Object.hasOwn(registryLabels, station.id) ? registryLabels[station.id] : [name, code !== name ? code : ''];
+      detail.append(el('strong', '', title));
+      if (subtitle) detail.append(el('small', '', subtitle));
+      const glyph = el('span', 'atlas-radio');
+      glyph.setAttribute('aria-hidden', 'true');
+      btn.setAttribute('aria-label', name);
+      btn.append(glyph, detail);
+      group.append(btn);
+      stationButtons.set(station.id, btn);
+      const option = el('option', '', name);
+      option.value = station.id;
+      options.append(option);
+    }
+    list.append(group);
+    selector.append(options);
   }
-  catalog.append(header, spatial.map, note, list);
-  atlas.append(catalog, dossier);
+  const mapRegion = el('div', 'atlas-map-region');
+  const hasArea = stations.some(station => station.location_kind === 'area' && !hasPoint(station));
+  const hasReference = stations.some(station => station.location_kind === 'reference');
+  const note = el('div', 'atlas-map-note');
+  if (hasArea) note.append(el('span', 'atlas-legend-area', 'Район наблюдений. Координаты приборов уточняются.'));
+  if (stations.some(hasPoint)) note.append(el('span', 'atlas-legend-point', 'Координаты станции'));
+  if (!hasArea && !stations.some(hasPoint)) note.append(el('span', '', 'Координаты выбранных станций не указаны.'));
+  const mapHeading = el('div', 'atlas-map-heading');
+  mapHeading.append(el('h2', '', hasArea || hasReference ? 'Центрально-Лесной заповедник' : 'Район наблюдений'));
+  mapRegion.append(mapHeading, spatial.map, note);
+  registry.append(header, list, mobileLabel);
+  catalog.append(registry, mapRegion);
+  const tabHost = el('div', 'atlas-tab-host');
+  const mapPanel = el('div', 'atlas-map-panel');
+  mapPanel.append(catalog, dossier);
+  const registryPanel = el('div', 'atlas-registry-panel');
+  atlas.append(tabHost);
+  const selectedAtEntry = stations.find(station => station.id === initialStation);
+  const tabs = mountAtlasTabs(tabHost, {
+    items: [
+      {value: 'registry', label: 'Реестр станций', panel: registryPanel},
+      {value: 'map', label: 'Карта', panel: mapPanel},
+    ],
+    initialValue: selectedAtEntry ? 'map' : 'registry',
+  });
+  function openStation(id) {
+    tabs.select('map');
+    choose(id);
+  }
+  const refreshRegistry = stationRegister(registryPanel, stations, openStation, searchInput);
+  function findStations() {
+    refreshRegistry();
+    tabs.select('registry');
+  }
+  searchInput?.addEventListener('input', findStations);
 
   function clearPhoto() {
     previewRequest?.abort();
@@ -334,6 +520,7 @@ export function mountStationAtlas(root, stations, {onOpenDataset, initialStation
       img.onerror = null;
       img.hidden = true;
       avatar.style.display = '';
+      figure.classList.remove('atlas-has-photo');
       caption.replaceChildren(el('span', '', 'Аватар станции'));
       addLink(station.photo_page_url, 'Фотогалерея ↗');
     }
@@ -342,6 +529,7 @@ export function mountStationAtlas(root, stations, {onOpenDataset, initialStation
       img.onload = () => {
         avatar.style.display = 'none';
         img.hidden = false;
+        figure.classList.add('atlas-has-photo');
         caption.replaceChildren(el('span', '', station.photo_credit ? 'Фото · ' + station.photo_credit : 'Фотография станции'));
         addLink(station.photo_source_url, 'Источник ↗');
         addLink(station.license_url || station.photo_license_url, station.photo_license || 'Лицензия ↗');
@@ -429,6 +617,7 @@ export function mountStationAtlas(root, stations, {onOpenDataset, initialStation
     }
     clearPhoto();
     selected = id;
+    selector.value = id;
     for (const [key, btn] of stationButtons) btn.setAttribute('aria-pressed', String(key === selected));
     spatial.select(station, notify);
     const info = el('div', 'atlas-info');
@@ -452,40 +641,54 @@ export function mountStationAtlas(root, stations, {onOpenDataset, initialStation
       facts.append(fact);
     }
     const related = el('section', 'atlas-related');
-    const relatedHeading = el('div', 'atlas-related-heading');
     const publications = station.publications || [];
-    relatedHeading.append(el('h3', '', isReference ? 'Опубликованные данные' : 'Наборы данных'), el('span', 'atlas-set-count', isReference ? publications.length : sets.length));
+    const relatedHeading = el('div', 'atlas-related-heading');
+    relatedHeading.append(el('h3', '', isReference ? 'Опубликованные данные' : 'Наборы данных'),
+      el('span', 'atlas-set-count', isReference ? publications.length : sets.length));
     related.append(relatedHeading);
-    for (const d of sets) {
-      const entry = button('atlas-dataset', '', () => onOpenDataset?.(d.id, station.id));
-      const detail = el('span', 'atlas-dataset-text');
-      detail.append(el('strong', '', datasetTitle(d, sets)));
-      const sourceLabel = {station: 'Станционные наблюдения', stream: 'Поток наблюдений'}[d.source] || d.source;
-      if (sourceLabel) detail.append(el('small', 'atlas-source', sourceLabel));
-      detail.append(el('small', '', period(d.start, d.end) + ' · ' + counted(Number(d.rows) || 0, 'запись', 'записи', 'записей')));
-      const arrow = el('span', 'atlas-open', '→');
-      arrow.setAttribute('aria-hidden', 'true');
-      entry.append(detail, arrow);
-      related.append(entry);
-    }
-    if (isReference) {
+    if (sets.length || publications.length) {
+      const {container: wrapper, body} = stationDataTable({
+        label: 'Данные станции ' + (station.name || code), className: 'atlas-data-table',
+        columns: isReference ? ['Набор', 'Период'] : ['Набор', 'Период наблюдений', 'Записи'],
+      });
+      for (const d of sets) {
+        const row = body.insertRow();
+        const entry = button('atlas-dataset', datasetTitle(d, sets), () => onOpenDataset?.(d.id, station.id));
+        const nameCell = row.insertCell();
+        nameCell.append(entry);
+        const sourceLabel = {station: 'Станционные наблюдения', stream: 'Поток наблюдений'}[d.source] || d.source;
+        if (sourceLabel) nameCell.append(el('small', 'atlas-source', sourceLabel));
+        row.insertCell().textContent = period(d.start, d.end);
+        row.insertCell().textContent = numbers.format(Number(d.rows) || 0);
+      }
       for (const publication of publications) {
         const link = externalLink(publication.url, 'atlas-dataset');
         if (!link) continue;
-        const detail = el('span', 'atlas-dataset-text');
-        detail.append(el('strong', '', publication.name), el('small', '', publication.period));
-        link.append(detail, el('span', 'atlas-open', '↗'));
-        related.append(link);
+        const row = body.insertRow();
+        link.textContent = publication.name;
+        const arrow = el('span', 'atlas-open', '↗');
+        arrow.setAttribute('aria-hidden', 'true');
+        link.append(arrow);
+        row.insertCell().append(link);
+        row.insertCell().textContent = publication.period;
       }
-      const passport = externalLink(station.source_url, 'atlas-passport');
-      if (passport) {
-        passport.textContent = 'Паспорт станции ↗';
-        info.append(passport);
+      for (const row of body.rows) {
+        row.dataset.slot = 'table-row';
+        for (const cell of row.cells) cell.dataset.slot = 'table-cell';
       }
-    } else if (!sets.length) related.append(el('p', 'atlas-description', 'Нет доступных наборов для этой станции.'));
-    dossier.replaceChildren(stationImage(station), info);
-    if (!isReference || sets.length) dossier.append(facts);
-    dossier.append(related);
+      related.append(wrapper);
+    } else {
+      related.append(el('p', 'atlas-description', 'Нет доступных наборов для этой станции.'));
+    }
+    const passport = externalLink(station.source_url, 'atlas-passport');
+    if (passport) {
+      passport.textContent = 'Паспорт станции ↗';
+      info.append(passport);
+    }
+    const profile = el('div', 'atlas-profile');
+    profile.append(stationImage(station), info);
+    if (!isReference || sets.length) profile.append(facts);
+    dossier.replaceChildren(profile, related);
     const eligible = sets.filter(d => d.can_upload_photo);
     if (onUploadPhoto && eligible.length) dossier.append(photoForm(station, eligible));
     if (notify) {
@@ -493,6 +696,11 @@ export function mountStationAtlas(root, stations, {onOpenDataset, initialStation
       if (window.matchMedia('(max-width: 840px)').matches) dossier.scrollIntoView({block: 'start'});
     }
   }
-  choose(stations.some(s => s.id === initialStation) ? initialStation : stations[0].id, false);
-  return () => { spatial.dispose(); clearPhoto(); };
+  choose(selectedAtEntry?.id || stations[0].id, false);
+  return () => {
+    searchInput?.removeEventListener('input', findStations);
+    tabs.dispose();
+    spatial.dispose();
+    clearPhoto();
+  };
 }

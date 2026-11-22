@@ -1,0 +1,42 @@
+/* NativeSelect composition and native checkbox/switch keep the browser's own focus, state and labels. */
+[data-native-control-wrap] { position: relative; box-sizing: border-box; vertical-align: middle; }
+.ui-native-select-wrap { display: inline-flex; min-width: 0; max-width: 100%; width: 100%; align-items: center; }
+.ui-native-select-wrap > select[data-slot="native-select"] {
+  width: 100%; min-width: 0; min-height: 2.4rem; border: 1px solid var(--border, #cbd3ce);
+  border-radius: var(--radius, 6px); background: var(--background, #fff); color: var(--foreground, #1c2923);
+  padding: .42rem 2rem .42rem .7rem; font: inherit; line-height: 1.35; appearance: none; cursor: pointer;
+}
+.ui-native-select-wrap:has(select[multiple], select[size]:not([size="1"])) > select {
+  appearance: auto; padding: .4rem .65rem; min-height: auto;
+}
+.ui-select-indicator, .ui-checkbox-indicator, .ui-switch-thumb { pointer-events: none; position: absolute; }
+.ui-select-indicator {
+  right: .6rem; width: 1rem; height: 1rem; stroke: var(--muted-foreground, #54635b); fill: none;
+  stroke-width: 1.6; stroke-linejoin: round; stroke-linecap: round;
+}
+.ui-native-select-wrap:has(select[multiple], select[size]:not([size="1"])) > .ui-select-indicator { display: none; }
+.ui-checkbox-wrap, .ui-switch-wrap { display: inline-flex; align-items: center; justify-content: center; flex: none; }
+.ui-checkbox-wrap > input[data-slot="checkbox"], .ui-switch-wrap > input[data-slot="switch"] {
+  appearance: none; box-sizing: border-box; min-width: 0; min-height: 0; margin: 0; padding: 0;
+  border: 1px solid var(--muted-foreground, #607067); background: var(--background, #fff); cursor: pointer;
+}
+.ui-checkbox-wrap > input[data-slot="checkbox"] { width: 1.05rem; height: 1.05rem; border-radius: 3px; }
+.ui-checkbox-indicator { display: none; width: 1rem; height: 1rem; stroke: var(--primary-foreground, #fff); stroke-width: 1.9; stroke-linejoin: round; stroke-linecap: round; fill: none; }
+.ui-checkbox-wrap > input:is(:checked, :indeterminate), .ui-switch-wrap > input:checked {
+  background: var(--primary, #126449); border-color: var(--primary, #126449);
+}
+.ui-checkbox-wrap > input:is(:checked, :indeterminate) + .ui-checkbox-indicator { display: block; }
+.ui-checkbox-indicator .ui-mixed, .ui-checkbox-wrap > input:indeterminate + .ui-checkbox-indicator .ui-check { display: none; }
+.ui-checkbox-wrap > input:indeterminate + .ui-checkbox-indicator .ui-mixed { display: block; }
+.ui-switch-wrap > input[data-slot="switch"] { width: 2rem; height: 1.15rem; border-radius: 1rem; background-color: var(--muted, #e1e4e0); }
+.ui-switch-wrap > input[data-slot="switch"]:checked { background-color: var(--primary, #126449); }
+.ui-switch-thumb { left: .14rem; width: .85rem; height: .85rem; border: 1px solid var(--muted-foreground, #607067); border-radius: 50%; background: var(--primary-foreground, #fff); }
+.ui-switch-wrap > input:checked + .ui-switch-thumb { left: 1rem; border-color: transparent; }
+[data-native-control-wrap] > :is(input, select):focus-visible { outline: 2px solid var(--ring, #287d65); outline-offset: 2px; }
+[data-native-control-wrap]:has(> :is(input, select):disabled) { opacity: .55; }
+[data-native-control-wrap] > :is(input, select):disabled { cursor: not-allowed; }
+[data-native-control-wrap]:has(> [hidden]) { display: none; }
+@media (forced-colors: active) {
+  [data-native-control-wrap] > :is(input, select) { appearance: auto; }
+  [data-native-control-wrap] > :is(svg, .ui-switch-thumb) { display: none !important; }
+}
