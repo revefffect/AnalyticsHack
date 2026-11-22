@@ -3,9 +3,9 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 WEATHER_HOME=/var/lib/weather
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && mkdir -p /var/lib/weather && chown 10001:10001 /var/lib/weather
-COPY weather/ weather/
-COPY tools/ tools/
-COPY ops/ ops/
-COPY data/raw/meteo_hack_dataset.zip data/raw/meteo_hack_dataset.zip
+COPY --chown=10001:10001 weather/ weather/
+COPY --chown=10001:10001 tools/ tools/
+COPY --chown=10001:10001 ops/ ops/
+COPY --chown=10001:10001 data/raw/meteo_hack_dataset.zip data/raw/meteo_hack_dataset.zip
 USER 10001:10001
 CMD ["python","-m","uvicorn","weather.app:app","--host","0.0.0.0","--port","8000"]
