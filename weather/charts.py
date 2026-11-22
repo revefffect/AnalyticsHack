@@ -21,15 +21,18 @@ def dashboard(ds,title):
     variables[0]["hide"]=2
     variables[1]["hide"]=2
     variables[3]["hide"]=2
+    variables.append({"type":"custom","name":"estimates","label":"Оценки по соседней станции",
+                      "query":"off,on","current":{"text":"off","value":"off"}})
     for name,label,values in (("station","Станция","ame60,kr1,kr2,era5"),("parameter","Показатель","t_air,pressure_hpa,rh,wind_speed,wind_gust,soil_05,soil_10,soil_20,wind_dir"),("step","Шаг","day,decade,month")):
         variables.append({"type":"custom","name":name,"label":label,"query":values,"current":{"text":values.split(",")[0],"value":values.split(",")[0]}})
     dsref={"type":"yesoreyeram-infinity-datasource","uid":"weather-rows"}
     panels=[]
+    chart_url="/portal/chart-data/${dataset}"
+    filters="?version=${version}&station=${station}&parameter=${parameter}&month=${month}&step=${step}&revision=${revision}&start=${start}&end=${end}"
     for i,(title_,columns) in enumerate([("Средние значения",["value"]),("Полнота наблюдений",["valid","expected"])]):
         cols=[{"selector":"period","text":"Период","type":"string"}]+[{"selector":c,"text":{"value":"Среднее","valid":"Пригодно","expected":"Ожидается"}[c],"type":"number"} for c in columns]
-        query="/portal/chart-data/${dataset}?version=${version}&station=${station}&parameter=${parameter}&month=${month}&step=${step}&revision=${revision}&start=${start}&end=${end}"
         panels.append({"id":i+1,"title":title_,"type":"barchart","gridPos":{"x":0,"y":i*8,"w":24,"h":8},"datasource":dsref,
-                       "targets":[{"refId":"A","datasource":dsref,"type":"json","source":"url","format":"table","parser":"backend","url":query,"url_options":{"method":"GET"},"columns":cols}],
+                       "targets":[{"refId":"A","datasource":dsref,"type":"json","source":"url","format":"table","parser":"backend","url":chart_url+filters,"url_options":{"method":"GET"},"columns":cols}],
                        "fieldConfig":{"defaults":{"color":{"mode":"palette-classic"}},"overrides":[]},"options":{"xField":"Период","showValue":"auto"}})
     drill="/portal?dataset=${dataset:percentencode}&station=${station:percentencode}&parameter=${parameter:percentencode}&month=${month:percentencode}&step=${step:percentencode}&version=${version:percentencode}&revision=${revision:percentencode}&date=${__data.fields[Период]}"
     for panel in panels:
@@ -38,6 +41,22 @@ def dashboard(ds,title):
                    "targets":[{"refId":"A","datasource":dsref,"type":"json","parser":"backend","source":"url","format":"table",
                                "url":"/portal/chart-data/${dataset}/events?version=${version}&station=${station}&parameter=${parameter}&month=${month}&revision=${revision}&start=${start}&end=${end}",
                                "url_options":{"method":"GET"},"columns":[{"selector":s,"text":t,"type":"string"} for s,t in (("measured","Измерение"),("received","Получено"),("kind","Событие"),("status","Состояние"),("mode","Источник"))]}]})
+    estimate_link=("/portal?dataset=${dataset:percentencode}&station=${station:percentencode}&parameter=t_air"
+                   "&month=${__value.time:date:YYYY-MM}&step=day&version=${version:percentencode}"
+                   "&revision=${revision:percentencode}&estimate=${__value.time:date:YYYY-MM-DD}")
+    panels.append({"id":4,"title":"Температура · наблюдения и оценки по соседней станции","type":"timeseries",
+                   "gridPos":{"x":0,"y":22,"w":24,"h":8},"datasource":dsref,
+                   "targets":[{"refId":"A","datasource":dsref,"type":"json","source":"url","format":"timeseries",
+                               "parser":"backend","url":chart_url+"/neighbor-estimates"+filters+"&enabled=${estimates}",
+                               "url_options":{"method":"GET"},"columns":[
+                                   {"selector":"time","text":"Дата","type":"timestamp"},
+                                   {"selector":"observed","text":"Измерено","type":"number"},
+                                   {"selector":"estimate","text":"Оценка по соседней станции","type":"number"}]}],
+                   "fieldConfig":{"defaults":{"unit":"celsius","custom":{"spanNulls":False}},"overrides":[{
+                       "matcher":{"id":"byName","options":"Оценка по соседней станции"},
+                       "properties":[{"id":"custom.lineWidth","value":0},{"id":"custom.showPoints","value":"always"},
+                                     {"id":"custom.pointSize","value":9},{"id":"color","value":{"mode":"fixed","fixedColor":"orange"}},
+                                     {"id":"links","value":[{"title":"Посмотреть основание оценки","url":estimate_link}]}]}]}})
     return {"uid":"w-"+ds,"title":title+" · "+ds[:6],"schemaVersion":40,"version":1,"editable":False,"panels":panels,
             "refresh":"30s","time":{"from":"now-1d","to":"now"},"timepicker":{"hidden":True},"templating":{"list":variables}}
 

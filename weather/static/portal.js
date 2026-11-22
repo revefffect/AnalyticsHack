@@ -155,6 +155,56 @@ function stationParameters(prefix) {
     const [first,last]=d.period, month=$("month");
     if(month.value<first || month.value>last) month.value=first;
   }
+  if(!prefix) renderQuestions();
+}
+
+function renderQuestions() {
+  const box=$("archive-questions");
+  box.replaceChildren();
+  const presets=[
+    ["pressure","Почему у Кр1 за апрель 2024 есть температура, а давление отсутствует?"],
+    ["january","Насколько холодным был январь 2010 года?"],
+    ["neighbors","Где в 2025 году можно оценить пропуски Кр2?"]
+  ];
+  for(const [key,title] of presets) {
+    const available=d=>d?.connected!==false && d?.archive_features?.includes(key);
+    const current=dataset($("dataset").value);
+    const source=available(current)?current:state.catalog.find(available);
+    if(source) box.append(button(title,()=>answerQuestion(source,key),"text-btn"));
+  }
+  box.hidden=!box.childElementCount;
+}
+
+async function answerQuestion(source,key) {
+  $("dataset").value=source.id;stationParameters("");
+  const january=key==="january", gaps=key==="neighbors";
+  periodMode(gaps?"range":"month");
+  $("station").value=january?"ame60":gaps?"kr2":"kr1";
+  $("parameter").value=key==="pressure"?"pressure_hpa":"t_air";
+  $("step").value="day";$("report-template").value="weather";
+  $("month").value=january?"2010-01":"2024-04";
+  if(gaps){$("range-start").value="2025-01-01";$("range-end").value="2025-12-31";}
+  const r=await loadReport({...reportFilters(),version:source.version});
+  if(!r || state.report!==r)return;
+  if(gaps){await showEstimates();return;}
+  const sel=state.selection, box=$("question-answer");
+  const unitValue=(value,unit)=>value==null?"Недостаточно данных":display(value)+" "+unit;
+  if(january){
+    const params=new URLSearchParams({station:sel.station,parameter:sel.parameter,month:1,first:1992,last:2021,version:r.version,revision:r.revision});
+    const ref=await api("/datasets/"+esc(sel.dataset)+"/climatology?"+params);
+    if(state.report!==r)return;
+    const difference=r.summary.value==null || ref.value==null?null:r.summary.value-ref.value;
+    box.replaceChildren(el("h3","Январь 2010 года на АМЕ-60"),facts([
+      ["Среднее за январь 2010",unitValue(r.summary.value,r.unit)],["Среднее января за 1992–2021",unitValue(ref.value,r.unit)],
+      ["Пригодных январей",ref.count],["Отклонение",unitValue(difference,r.unit)]]));
+  } else {
+    const air=await api(reportPath({...sel,parameter:"t_air"},"report"));
+    if(state.report!==r)return;
+    const line=v=>unitValue(v.summary.value,v.unit)+" · пригодных суток "+v.summary.valid+" из "+v.summary.expected;
+    box.replaceChildren(el("h3","Кр1 · апрель 2024"),facts([["Температура воздуха",line(air)],["Давление",line(r)]]),
+      el("p","Полнота проверяется отдельно для каждого показателя. Выберите дату в таблице, чтобы увидеть исключённые измерения."));
+  }
+  box.hidden=false;
 }
 async function refreshCatalog() {
   const result=await api("/catalog");
@@ -368,6 +418,7 @@ async function loadReport(selection) {
     state.report=data;state.selection={...sel,template:$("report-template").value,version:data.version,revision:data.revision};renderReport();
     const params=new URLSearchParams(Object.entries(state.selection).filter(([,v])=>v!=null));
     history.replaceState(null,"",location.pathname+"?"+params);
+    return data;
   } catch(error) {
     if(ticket===state.reportRequest)$("report-empty").textContent="Отчёт не сформирован.";throw error;
   }
@@ -383,7 +434,10 @@ async function openReportLink(params) {
   const sel=reportFilters();
   if(params.get("version"))sel.version=params.get("version");
   if(/^\d+$/.test(params.get("revision")||""))sel.revision=params.get("revision");
-  await loadReport(sel);const date=params.get("date");
+  const report=await loadReport(sel);if(!report || state.report!==report)return;
+  const estimate=params.get("estimate");
+  if(/^\d{4}-\d{2}-\d{2}$/.test(estimate || "") && !$("neighbor-layer").hidden)await showEstimates(estimate);
+  const date=params.get("date");
   if(/^\d{4}-\d{2}-\d{2}$/.test(date || ""))await evidence(date);
 }
 function renderTable() {
@@ -394,13 +448,25 @@ function renderTable() {
     if(key==="period" && /^\d{4}-\d{2}-\d{2}$/.test(r.period) && state.selection.step==="day") {
       const b=button(r.period,()=>evidence(r.period),"text-btn");b.title="Проверить исходные наблюдения";return b;
     }
-    if(key==="value" && r.value==null)return r.partial?"Выбран неполный период":"Нет значения";
+    if(key==="value" && r.value==null){
+      if(!$("neighbor-layer").hidden && r.period.startsWith("2025-")){
+        const cell=el("span","Нет значения ");
+        cell.append(button("Проверить оценку",()=>showEstimates(r.period),"text-btn estimate-action"));return cell;
+      }
+      return r.partial?"Выбран неполный период":"Нет значения";
+    }
     return display(r[key]);
   });
   $("table").replaceChildren(table);
 }
 function renderReport(savedId) {
   const r=state.report,sel=state.selection, d=dataset(sel.dataset);
+  $("question-answer").hidden=true;$("question-answer").replaceChildren();
+  $("neighbor-details").hidden=true;$("neighbor-details").replaceChildren();
+  $("neighbor-toggle").textContent="Показать оценки пропусков";$("neighbor-toggle").setAttribute("aria-expanded","false");
+  const eligiblePeriod=sel.start?sel.start<="2025-12-31" && sel.end>="2025-01-01":sel.month?.startsWith("2025-");
+  $("neighbor-layer").hidden=Boolean(savedId || !eligiblePeriod || sel.step!=="day" || sel.parameter!=="t_air"
+    || !["kr1","kr2"].includes(sel.station) || !d?.archive_features?.includes("neighbors"));
   $("report-result").hidden=false;$("report-empty").hidden=true;$("evidence").hidden=true;$("quality").open=false;
   $("baseline").hidden=Boolean(savedId || sel.start);$("baseline").open=false;$("baseline-result").replaceChildren();
   $("quality").hidden=Boolean(savedId || sel.start);$("print").hidden=Boolean(sel.start);
@@ -438,6 +504,39 @@ function renderReport(savedId) {
   }));
   columns=getColumns();settings();renderTable();
 }
+
+async function showEstimates(focusDate) {
+  const sel=state.selection, report=state.report;
+  if(!report || $("neighbor-layer").hidden)return;
+  const start=sel.start || sel.month+"-01";
+  const end=sel.end || report.rows[report.rows.length-1].period;
+  const params=new URLSearchParams({station:sel.station,parameter:sel.parameter,start,end,version:report.version,revision:report.revision});
+  const data=await api("/datasets/"+esc(sel.dataset)+"/neighbor-estimates?"+params);
+  if(state.report!==report)return;
+  const box=$("neighbor-details"), points=focusDate?data.points.filter(p=>p.date===focusDate):data.points;
+  box.replaceChildren(el("h3",focusDate?"Оценка за "+focusDate:"Суточные оценки по соседней станции"),
+    el("p","Среднее и полнота отчёта рассчитаны по наблюдениям. Оценка использует температуру соседней станции за ту же дату и сезонную поправку по парным дням 2024 года."));
+  if(points.length){
+    const rows=points.map(p=>({...p,donor:stations[p.donor]}));
+    const table=gridTable([{key:"date",title:"Дата"},{key:"estimate",title:"Оценка, °C"},{key:"valid_hours",title:"Часов из 24"},
+      {key:"donor",title:"Станция-источник"},{key:"reference",title:"У соседа, °C"},{key:"offset",title:"Поправка, °C"},{key:"pairs",title:"Парных дней"}],rows,
+      (r,key)=>key==="date"?button(r.date,()=>evidence(r.date),"text-btn"):display(r[key]));
+    box.append(table);
+    const link=new URL(report.dashboard_url,location.origin);
+    link.searchParams.set("var-estimates","on");link.searchParams.set("viewPanel","panel-4");
+    link.searchParams.set("from",Date.parse(start+"T00:00:00Z"));
+    link.searchParams.set("to",Date.parse(end+"T23:59:59Z"));
+    box.append(safeLink("Наблюдения и оценки в Grafana",link.href,"action-link"));
+  } else box.append(el("p","Для выбранных дат доступных оценок нет."));
+  $("neighbor-toggle").setAttribute("aria-expanded","true");$("neighbor-toggle").textContent="Скрыть оценки";
+  box.hidden=false;
+  if(focusDate)box.scrollIntoView({block:"center"});
+}
+$("neighbor-toggle").onclick=()=>busy($("neighbor-toggle"),async()=>{
+  if($("neighbor-details").hidden){await showEstimates();return;}
+  $("neighbor-details").hidden=true;$("neighbor-toggle").setAttribute("aria-expanded","false");
+  $("neighbor-toggle").textContent="Показать оценки пропусков";
+});
 function savedLink(id) {
   if(!id)return;
   const url=new URL(location.pathname,location.origin);url.searchParams.set("saved",id);

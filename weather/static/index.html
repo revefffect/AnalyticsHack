@@ -61,6 +61,7 @@
       <section id="report" class="view" hidden>
         <form id="filters" class="card">
           <h2>Выбор среза</h2>
+          <div class="actions" id="archive-questions" aria-label="Готовые вопросы"></div>
           <div class="filter-grid">
             <label>Набор<select id="dataset" required></select></label>
             <label>Станция<select id="station" required></select></label>
@@ -78,7 +79,12 @@
         <article id="report-result" class="card report-result" hidden>
           <div class="section-heading"><div><p id="report-subtitle" class="kicker"></p><h2 id="report-title"></h2></div><button type="button" id="print">Печать</button></div>
           <div class="kpis" id="kpis"></div>
+          <section id="question-answer" class="evidence" aria-live="polite" hidden></section>
           <div id="report-actions" class="actions"></div><p id="saved-link" aria-live="polite"></p>
+          <section id="neighbor-layer" class="disclosure" hidden>
+            <button id="neighbor-toggle" type="button" aria-expanded="false" aria-controls="neighbor-details">Показать оценки пропусков</button>
+            <div id="neighbor-details" hidden></div>
+          </section>
           <details id="provenance" class="disclosure"><summary>Источник, методика и покрытие</summary><dl id="report-meta" class="facts"></dl></details>
           <div id="snapshot-events" hidden></div>
           <details id="settings" class="disclosure"><summary>Настроить колонки таблицы</summary><div id="table-settings"></div></details>

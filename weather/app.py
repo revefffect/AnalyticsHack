@@ -1,3 +1,4 @@
+import calendar
 import csv
 import io
 import json
@@ -16,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import auth, charts, external, imports, ranges, reports, store, stream
+from . import auth, charts, external, imports, neighbors, ranges, reports, store, stream
 
 STATIC=Path(__file__).parent/"static"
 ARCHIVE=store.ROOT/"data/raw/meteo_hack_dataset.zip"
@@ -134,6 +135,7 @@ def catalog(request:Request,q:str="",station:str="",parameter:str=""):
             periods=sorted(k.split("/")[1] for k in m["partitions"])
             connected=store.one(con,"SELECT version FROM connections WHERE dataset=:d AND actor=:a AND version=:v",d=d["id"],a=actor,v=v)
             card={**d,"public":bool(d["public"]),"connected":bool(connected) or d["owner"]==actor,"stations":stations,"parameters":params,
+                  "archive_features":neighbors.features(m),
                   "period":[periods[0],periods[-1]],"provider":m["source"].get("provider","Владелец набора"),"updated_at":created,
                   "data_type":m["source"].get("data_type","station"),"format":m["input"].rsplit(".",1)[-1],"count":sum(m["counts"].values()),
                   "territory":m["source"].get("territory","Указана в исходнике" if m["source"].get("coordinates") else "Не указана"),
@@ -174,6 +176,13 @@ def evidence(request:Request,ds:str,station:str,parameter:str,date:str,version:s
         return reports.evidence(con,auth.actor(request),ds,station,parameter,date,version,revision)
 
 
+@app.get("/portal/datasets/{ds}/neighbor-estimates")
+def neighbor_estimates(request:Request,ds:str,station:str,parameter:str,start:date,end:date,
+                       version:str|None=None, revision:int|None=Query(default=None,ge=0)):
+    with store.db().connect() as con:
+        return neighbors.layer(con,auth.actor(request),ds,station,parameter,start,end,version,revision)
+
+
 @app.get("/portal/datasets/{ds}/profile")
 def profile(request:Request,ds:str,station:str,parameter:str,month:str,version:str|None=None):
     with store.db().connect() as con:
@@ -181,15 +190,17 @@ def profile(request:Request,ds:str,station:str,parameter:str,month:str,version:s
 
 
 @app.get("/portal/datasets/{ds}/climatology")
-def climate(request:Request,ds:str,station:str,parameter:str,month:int=Query(ge=1,le=12),first:int=1992,last:int=2021):
+def climate(request:Request,ds:str,station:str,parameter:str,month:int=Query(ge=1,le=12),first:int=1992,last:int=2021,
+            version:str|None=None,revision:int|None=Query(default=None,ge=0)):
     if not 1<=first<=last<=9999 or last-first>150:
         raise ValueError("Выберите базовый период до 151 года.")
     role=auth.actor(request)
     with store.db().connect() as con:
-        dsrow,v,_,_=reports.visible(con,role,ds)
+        dsrow,v,_,_=reports.visible(con,role,ds,version)
+        cap=dsrow["revision"] if revision is None else revision
         rows={}
         for year in range(first,last+1):
-            rep=reports.report(con,role,ds,station,parameter,f"{year:04}-{month:02}","month",v,dsrow["revision"])
+            rep=reports.report(con,role,ds,station,parameter,f"{year:04}-{month:02}","month",v,cap)
             if rep["summary"]["value"] is not None:
                 rows[year]=rep["summary"]["value"]
     return {"years":rows,"count":len(rows),"value":reports.average(list(rows.values()),parameter),"unit":imports.UNITS[parameter],"version":v,"method":"equal-valid-years-v1"}
@@ -376,6 +387,26 @@ def chart_role(request):
         if auth.equal(key,auth.secret("GRAFANA_"+role.upper()+"_KEY")):
             return role
     raise HTTPException(401,"Требуется ключ источника Grafana.")
+
+
+@app.get("/portal/chart-data/{ds}/neighbor-estimates")
+def chart_estimates(request:Request,ds:str,station:str,parameter:str,month:str,step:str="day",
+                    enabled:str="off",version:str="",revision:str="",start:str="",end:str=""):
+    role=chart_role(request)
+    with store.db().connect() as con:
+        if enabled != "on" or step != "day":
+            reports.visible(con,role,ds,version or None)
+            return []
+        if start or end:
+            first, last = date.fromisoformat(start), date.fromisoformat(end)
+        else:
+            first = date.fromisoformat(month + "-01")
+            last = first.replace(day=calendar.monthrange(first.year,first.month)[1])
+        data = neighbors.layer(con,role,ds,station,parameter,first,last,version or None,
+                               int(revision) if revision else None,include_observed=True)
+        estimates = {p["date"]:p["estimate"] for p in data["points"]}
+        return [{"time":day+"T00:00:00Z","observed":observed,"estimate":estimates.get(day)}
+                for day,observed in data["observed"].items()]
 
 
 @app.get("/portal/chart-data/{ds}/events")

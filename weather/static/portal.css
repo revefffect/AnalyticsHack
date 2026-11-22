@@ -123,6 +123,7 @@ pre { white-space:pre-wrap; overflow-wrap:anywhere; background:#f1f5ef; padding:
   .search-label { width:100%; } .facts { gap:.22rem .65rem; }
 }
 @media print {
+  #neighbor-layer, #question-answer, .estimate-action { display:none!important; }
   :root,body,.shell,.card { color:#111; background:white; }
   .shell { width:100%; padding:0; } .mast,.workspace-heading,nav,#filters,#report-empty,#report-actions,#print,#settings,#quality,#baseline,#notice,#saved-link,.skip,#evidence { display:none!important; }
   .text-btn { display:inline; padding:0; border:0; color:inherit; text-decoration:none; font:inherit; }

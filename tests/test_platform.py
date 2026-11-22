@@ -112,6 +112,56 @@ class Platform(unittest.TestCase):
         self.assertEqual(len(rr["rows"]),2)
         self.assertTrue(all(row["partial"] and row["value"] is None for row in rr["rows"]))
 
+    def test_neighbor_layer_is_separate_versioned_and_permission_scoped(self):
+        raw=(ROOT/"data/raw/meteo_hack_dataset.zip").read_bytes()
+        draft=self.preview("archive.zip",raw)
+        names=tuple(f"{s}_{y}.csv" for s in ("kr1","kr2") for y in (2024,2025))
+        files=[{k:f[k] for k in ("name","mapping","station")} for f in draft["files"] if f["name"].endswith(names)]
+        version=self.confirm(draft,files)
+        ds=version["id"]
+        base=f"/portal/datasets/{ds}/"
+        chart=f"/portal/chart-data/{ds}"
+        p={"station":"kr2","parameter":"t_air","month":"2025-05","step":"day","version":version["version"]}
+        dates={"start":"2025-01-01","end":"2025-12-31"}
+        private=self.client.get(base+"neighbor-estimates",params={**p,**dates},headers=self.business)
+        self.assertEqual(private.status_code,404)
+        self.allow(ds)
+        def get(path,params,headers):
+            response=self.client.get(path,params=params,headers=headers)
+            response.raise_for_status()
+            return response
+        def observed():
+            return [get(base+"report",dict(p,step=step),self.business).content for step in ("day","decade","month")]+[
+                get(base+"export",dict(p,format=fmt),self.business).content for fmt in ("csv","json")]+[
+                get(chart,p,{"x-weather-key":"test-chart"}).content,
+                get(base+"climatology",dict(p,month=5,first=2024,last=2025),self.business).content]
+        before=observed()
+        results=get(base+"neighbor-estimates",{**p,**dates},self.business).json()["points"]
+        self.assertEqual([(r["date"],round(r["estimate"],2)) for r in results],[
+            ("2025-05-23",18.10),("2025-05-27",17.14),("2025-07-09",19.98),("2025-08-03",18.24)])
+        first=results[0]
+        self.assertEqual((first["donor"],first["valid_hours"],first["pairs"]),("kr1",15,90))
+        self.assertAlmostEqual(first["estimate"],first["reference"]+first["offset"])
+        series=get(chart+"/neighbor-estimates",dict(p,enabled="on"),{"x-weather-key":"test-chart"}).json()
+        self.assertEqual(len(series),31)
+        self.assertIsNone(series[22]["observed"])
+        self.assertEqual(series[22]["estimate"],first["estimate"])
+        self.assertEqual(sum(r["estimate"] is not None for r in series),2)
+        self.assertEqual(get(chart+"/neighbor-estimates",p,{"x-weather-key":"test-chart"}).json(),[])
+        self.assertEqual(get(base+"neighbor-estimates",{**p,**dates,"parameter":"pressure_hpa"},self.business).json()["points"],[])
+        self.assertEqual(observed(),before)
+        saved=self.client.post("/portal/saved",json={"dataset":ds,**p},headers=self.business).json()["report"]
+        self.assertEqual(saved["rows"],json.loads(before[0])["rows"])
+        self.assertIsNone(saved["rows"][22]["value"])
+        measured=get(base+"evidence",dict(p,date=first["date"]),self.business).json()["rows"]
+        hours={int(r["timestamp"][11:13]) for r in measured if r["status"]=="observed"}
+        for hour in sorted(set(range(24))-hours)[:3]:
+            self.client.post("/portal/stream/"+ds,headers={"Authorization":"Bearer test-station"},json={
+                "id":f"gap-{hour}","station":"kr2","timestamp":f"2025-05-23 {hour:02}:23","values":{"t_air":15}}).raise_for_status()
+        day=dict(p,start=first["date"],end=first["date"])
+        self.assertEqual(get(base+"neighbor-estimates",day,self.business).json()["points"],[])
+        self.assertEqual(get(base+"neighbor-estimates",dict(day,revision=0),self.business).json()["points"],[first])
+
     def test_stream_late_retry_recover_and_stale(self):
         v=self.fixture();ds=v["id"]; self.allow(ds)
         rule={"station":"kr1","parameter":"t_air","threshold":20,"duration_minutes":60,"min_slots":2,"stale_minutes":61,"recipient":"Дежурный"}
