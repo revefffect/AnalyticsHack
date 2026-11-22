@@ -114,13 +114,13 @@ class StationAtlasMigration(unittest.TestCase):
             with ThreadPoolExecutor(max_workers=4) as workers:
                 copies = list(workers.map(open_store, range(4)))
             with copies[0].connect(write=True) as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
                 self.assertEqual(db.execute('SELECT name FROM datasets WHERE id=?', ('legacy',)).fetchone()[0], 'v1')
                 db.execute("INSERT INTO station_photos VALUES ('legacy','KR1','','image/jpeg',X'01')")
                 db.execute("INSERT INTO dataset_members VALUES ('legacy','reader1','reader')")
-                db.execute('PRAGMA user_version=4')
+                db.execute('PRAGMA user_version=5')
             with Store(root).connect() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 5)
                 self.assertEqual(db.execute('SELECT role FROM dataset_members').fetchone()[0], 'reader')
                 self.assertEqual(db.execute('SELECT image FROM station_photos').fetchone()[0], b'\x01')
 
@@ -143,7 +143,7 @@ class StationAtlasMigration(unittest.TestCase):
             finally:
                 db.close()
             with Store(root).connect(write=True) as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)
                 self.assertEqual(tuple(db.execute('SELECT owner,visibility FROM datasets').fetchone()), ('owner', 'private'))
                 self.assertEqual(tuple(db.execute('SELECT station,source_row FROM observations').fetchone()), ('KR1', 2))
                 self.assertEqual(tuple(db.execute('SELECT credit,hex(image) FROM station_photos').fetchone()), ('Автор', '0102'))
@@ -159,7 +159,7 @@ class StationAtlasMigration(unittest.TestCase):
                 db.execute("DELETE FROM datasets WHERE id='archive'")
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM dataset_members').fetchone()[0], 0)
 
-    def test_concurrent_first_start_creates_all_three_schema_versions(self):
+    def test_concurrent_first_start_creates_all_schema_versions(self):
         with TemporaryDirectory() as root:
             start = Barrier(6)
 
@@ -174,8 +174,8 @@ class StationAtlasMigration(unittest.TestCase):
                 results = [workers.submit(initialize) for _ in range(6)]
                 for result in results:
                     version, tables = result.result()
-                    self.assertEqual(version, 3)
-                    self.assertTrue({'datasets', 'station_photos', 'dataset_members'} <= tables)
+                    self.assertEqual(version, 4)
+                    self.assertTrue({'datasets', 'station_photos', 'dataset_members', 'expert_annotations'} <= tables)
 
     def test_failed_upgrade_rolls_back_earlier_schema_changes(self):
         with TemporaryDirectory() as root:
@@ -190,4 +190,4 @@ class StationAtlasMigration(unittest.TestCase):
             finally:
                 db.close()
             with Store(root).connect() as db:
-                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 3)
+                self.assertEqual(db.execute('PRAGMA user_version').fetchone()[0], 4)

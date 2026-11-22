@@ -1,5 +1,59 @@
 import assert from 'node:assert/strict';
 
+async function researcherDashboard(ui, offline) {
+  const {$, all, wait, fire} = ui;
+  const filter = $('#filter-form');
+  if (offline) {
+    const archive = [...filter.elements.dataset.options].find(option => option.textContent.includes('апрель 2024'));
+    assert.ok(archive, 'Published April archive');
+    if (filter.elements.dataset.value !== archive.value) {
+      const previous = $('#series-table');
+      filter.elements.dataset.value = archive.value;
+      fire(filter.elements.dataset, 'change');
+      await wait(() => !previous.isConnected, 'April dataset loaded');
+    }
+  }
+  filter.elements.station.value = 'KR1';
+  fire(filter.elements.station,'change');
+  filter.elements.step.value = 'day';
+  const previous = $('#series-table');
+  fire(filter, 'submit');
+  await wait(() => !previous.isConnected && all('#series-table tbody tr').length === 30, '30 April KR1 observations');
+  await wait(() => $('[data-insight-results] table tbody tr'), 'Forecast validation on the archive');
+  assert.match($('[data-insight-results]').textContent, /28\s*\/\s*30/);
+  assert.ok(all('[data-insight-results] table tbody tr').length >= 2);
+
+  const chat = $('[data-dash-chat]');
+  await wait(() => !chat.querySelector('button[type=submit]').disabled, 'Assistant controls available');
+  chat.elements.prompt.value = 'Покажи температуру столбцами, оставь график и таблицу';
+  fire(chat, 'submit');
+  const apply = await wait(() => $('[data-dash-apply]'), 'Assistant proposed a configuration');
+  assert.match($('.dashboard-chat-log').textContent, /Локальный помощник/);
+  assert.equal($('[data-dash-kind]').value, 'line');
+  apply.click();
+  await wait(() => $('.chart').dataset.chartKind === 'bar' && !$('[data-dash-save]').disabled, 'Applied change affects chart');
+  assert.ok($('[data-dashboard-panel=metrics]').hidden);
+  assert.equal($('[data-dashboard-panel=table]').hidden, false);
+  const markRow = all('[data-dash-panels] label').find(label => label.textContent.includes('отмет') || label.textContent.includes('Размет'));
+  assert.ok(markRow, 'Manual annotation panel control');
+  markRow.querySelector('input').click();
+  assert.equal($('[data-dashboard-panel=annotations]').hidden, false);
+  $('[data-dash-save]').click();
+  await wait(() => $('[data-dash-status]').textContent.toLowerCase().includes('сохран'), 'Saved layout');
+  const note = await wait(() => {
+    const form = $('[data-anno-form]'); return form && !form.hidden && form;
+  }, 'Editable expert annotations');
+  note.elements.start.value = note.elements.end.value = '2024-04-02';
+  note.elements.label.value = 'normal';
+  note.elements.note.value = 'Проверка интервала экспертом в сквозном сценарии.';
+  fire(note, 'submit');
+  await wait(() => $('[data-anno-list]').textContent.includes('Проверка интервала экспертом'), 'Persist annotation');
+  const previousForm = note;
+  fire(filter, 'submit');
+  await wait(() => !previousForm.isConnected && $('[data-dash-kind]')?.value === 'bar' &&
+    $('[data-anno-list]')?.textContent.includes('Проверка интервала экспертом'), 'Reload preserves selection and notes');
+}
+
 // Exercise production navigation and presentation under both the file adapter and FastAPI.
 export async function journey(ui, {offline, mobile}) {
   const {w, d, $, all, wait, fire, go} = ui;
@@ -49,12 +103,37 @@ export async function journey(ui, {offline, mobile}) {
   qualityFilter.value = qualityFilter.options[1].value; fire(qualityFilter,'change');
   await wait(() => all('#quality-rows tbody tr').length === filteredCount, 'Filtered source rows');
   assert.ok($('#quality-rows tbody [data-slot=badge]'));
+  await researcherDashboard(ui, offline);
   $('#snapshot').click();
   await wait(() => $('#report table tbody tr'), 'Created report with real observations');
   const savedTitle = $('#report h2').textContent;
   const saved = await go('reports','[data-report]');
   saved.click();
   await wait(() => $('#report h2')?.textContent === savedTitle, 'Opened saved report');
+  assert.ok($('#decision-pdf'));
+  if (offline) {
+    $('#decision-pdf').click();
+    await wait(() => $('#notice').textContent.includes('PDF этого отчёта формирует сервер'), 'Fresh local report PDF requires backend');
+    $('[data-report="archive-summary"]').click();
+    await wait(() => $('#report h2')?.textContent.includes('на Кр1 за апрель 2024'), 'Packaged management report');
+    let blob;
+    w.URL.createObjectURL = value => { blob = value; return 'blob:archive-pdf'; };
+    w.URL.revokeObjectURL = () => {};
+    const nativeClick = w.HTMLAnchorElement.prototype.click;
+    let fileName;
+    w.HTMLAnchorElement.prototype.click = function () {
+      if (this.download) fileName = this.download;
+      else nativeClick.call(this);
+    };
+    try {
+      $('#decision-pdf').click();
+      await wait(() => fileName?.endsWith('.pdf'), 'Standalone PDF download');
+      assert.equal(blob.type, 'application/pdf');
+      assert.equal(Buffer.from(await blob.arrayBuffer()).subarray(0,5).toString(), '%PDF-');
+    } finally {
+      w.HTMLAnchorElement.prototype.click = nativeClick;
+    }
+  }
   await go('satellite', '#satellite-result .satellite-image');
   const satForm = $('#satellite-form');
   satForm.elements.layer.value = 'surface'; fire(satForm.elements.layer,'change');

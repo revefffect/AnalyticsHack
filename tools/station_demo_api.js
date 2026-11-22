@@ -1,7 +1,10 @@
 // This adapter serves the FastAPI samples embedded by the demo builder.
 // Updates affect the current tab only. The deployed app always uses the server.
 const {fixtures, sampleSeries, sampleQuality, csvExports, satelliteLayers, rawArchives, sampleUpload} = records;
+const {sampleInsights, reportPdf, chartPresets, defaultChart} = records;
 const photos = new Map();
+const drafts = new Map();
+const annotations = [];
 const utcDay = () => new Date().toISOString().slice(0, 10);
 const reply = (detail, status = 422) => Response.json({detail}, {status});
 const decoded = base64 => Uint8Array.from(atob(base64), character => character.charCodeAt(0));
@@ -68,6 +71,45 @@ const sessionStorage = {
   removeItem: key => sessionValues.delete(key),
 };
 
+function selectedNotes(dataset, fields) {
+  return annotations.filter(note => note.dataset === dataset && note.station === fields.station &&
+    note.parameter === fields.parameter && note.start <= fields.end && note.end >= fields.start);
+}
+
+function annotationResponse(base, id, fields, method) {
+  const series = sampleSeries[[base + '/series', fields.station, 'day'].join('|')];
+  if (!series || fields.parameter !== series.parameter || !fields.start || !fields.end || fields.start > fields.end)
+    return reply('Проверьте станцию, параметр и интервал метки.');
+  if (method === 'GET') return Response.json({can_annotate: true, scope:'local', items: selectedNotes(id, fields)});
+  const note = fields.note?.trim();
+  if (fields.start < series.start || fields.end > series.end || !note || note.length > 1000 ||
+      !['anomaly','sensor_issue','weather_event','normal','gap'].includes(fields.label))
+    return reply('Проверьте границы интервала, категорию и текст заметки.');
+  const measured = series.points.some(point => point.start >= fields.start && point.start <= fields.end &&
+    sampleQuality[[base, fields.station, point.start].join('|')]?.rows.length);
+  if (fields.label !== 'gap' && !measured) return reply('В интервале нет исходных строк. Можно отметить пропуск.');
+  const duplicate = selectedNotes(id, fields).find(item => item.start === fields.start && item.end === fields.end &&
+    item.label === fields.label && item.note === note);
+  if (duplicate) return Response.json(duplicate);
+  const entry = {id:'local-' + (annotations.length + 1), dataset:id, station:fields.station, parameter:fields.parameter,
+    start:fields.start, end:fields.end, label:fields.label, note, author:fixtures['/api/session'].name,
+    created_at:new Date().toISOString()};
+  annotations.push(entry);
+  return Response.json(entry, {status:201});
+}
+
+function localChartSuggestion(prompt) {
+  const text = String(prompt || '').toLocaleLowerCase('ru');
+  // Only select from response examples produced by the server's no-key guide.
+  const examples = [['гистограмм','histogram'], ['распределен','histogram'], ['столб','bar'],
+    ['точечн','scatter'], ['точками','scatter'], ['лини','line'], ['динамик','line']];
+  const panels = /(?:оставь|только).*график.*таблиц/.test(text);
+  const kind = examples.find(([word]) => text.includes(word))?.[1];
+  const preset = chartPresets[panels ? 'panels' : (kind || 'help')];
+  const patch = panels && kind ? {...preset.patch, ...chartPresets[kind].patch} : preset.patch;
+  return {...preset, patch, source:'local', reply:'Автономное демо использует локальные правила. ' + preset.reply};
+}
+
 async function fetch(input, options = {}) {
   const url = new URL(input, 'https://preview.test');
   const path = url.pathname;
@@ -81,6 +123,23 @@ async function fetch(input, options = {}) {
     ...fixtures['/api/stations'].flatMap(station => station.datasets),
   ].filter(card => card.id === id);
 
+  if (path.startsWith('/api/reports/') && path.endsWith('/pdf')) {
+    if (path !== '/api/reports/archive-summary/pdf') return reply(
+      'PDF этого отчёта формирует сервер. В автономном демо доступна печать и готовый PDF отчёта «Температура на Кр1 за апрель 2024 года».', 503);
+    return new Response(decoded(reportPdf), {headers:{'Content-Type':'application/pdf',
+      'Content-Disposition':'attachment; filename="decision-report.pdf"'}});
+  }
+  if (path === base + '/annotations') return annotationResponse(base, id,
+    method === 'GET' ? Object.fromEntries(url.searchParams) : JSON.parse(options.body), method);
+  if (path === base + '/chart-workspace' || path === base + '/chart-assistant') {
+    const body = options.body ? JSON.parse(options.body) : {};
+    const fields = body.selection || Object.fromEntries(url.searchParams);
+    const key = [id, fields.station, fields.parameter, fields.start, fields.end, fields.step].join('|');
+    if (path.endsWith('/chart-assistant'))
+      return Response.json(localChartSuggestion(body.messages?.at(-1)?.content));
+    if (method === 'PUT') drafts.set(key, {settings:body.settings, edits:body.edits || {}});
+    return Response.json({...((drafts.get(key)) || defaultChart), scope:'local'});
+  }
   if (path.endsWith('/photo')) {
     if (method === 'PUT') {
       photos.set(path, options.body);
@@ -161,17 +220,19 @@ async function fetch(input, options = {}) {
     return Response.json({url: null, detail: 'Grafana подключается администратором в серверной версии.'});
   }
   if (path === '/api/connectors/open-meteo') return reply('Получение новых наблюдений доступно в серверной версии.', 503);
-  if ([base + '/series', base + '/export', base + '/reports'].includes(path)) {
+  if ([base + '/series', base + '/export', base + '/reports', base + '/insights'].includes(path)) {
     const fields = method === 'POST' ? JSON.parse(options.body) : Object.fromEntries(url.searchParams);
     const key = [base + '/series', fields.station, fields.step].join('|');
     const result = sampleSeries[key];
     if (!result || ['parameter', 'start', 'end'].some(key => fields[key] !== result[key]))
       return reply('Выберите полный период станции, указанный в карточке набора.');
+    if (path.endsWith('/insights')) return Response.json(sampleInsights[key]);
     if (path.endsWith('/reports')) {
       const list = fixtures['/api/reports'];
       const reportId = 'local-report-' + (list.length + 1);
       const report = {...result, id: reportId, title: fields.title, template: fields.template,
-        metadata: fixtures['/api/datasets'].find(row => row.id === id).metadata};
+        metadata: fixtures['/api/datasets'].find(row => row.id === id).metadata,
+        insights: sampleInsights[key], annotations: selectedNotes(id, fields)};
       fixtures['/api/reports/' + reportId] = report;
       list.unshift({id: reportId, title: report.title, created_at: new Date().toISOString(), dataset: id});
       return Response.json(report);

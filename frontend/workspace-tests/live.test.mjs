@@ -8,7 +8,8 @@ import {journey} from './journey.mjs';
 
 function apiServer() {
   const worker = spawn(process.env.PYTHON || 'python3', ['-u','frontend/workspace-tests/api_bridge.py'], {
-    cwd: root, env: {...process.env, PYTHONPATH: root, METEO_FEED_OWNER: 'research'}, stdio: ['pipe','pipe','inherit'],
+    cwd: root, env: {...process.env, PYTHONPATH: root, METEO_FEED_OWNER: 'research',
+      DEEPSEEK_API_KEY: '', YANDEX_API_KEY: '', YANDEX_FOLDER_ID: ''}, stdio: ['pipe','pipe','inherit'],
   });
   let sequence = 0;
   const pending = new Map();
@@ -56,6 +57,10 @@ test('mobile live workspace drives FastAPI, permissions and real archive process
     };
     await import(local('meteo/web/app.js').href);
     await journey(ui, {offline:false, mobile:true});
+    const reports = await (await api.fetch('/api/reports', {headers})).json();
+    const pdf = await api.fetch('/api/reports/' + reports[0].id + '/pdf', {headers});
+    assert.equal(pdf.headers.get('Content-Type'), 'application/pdf');
+    assert.equal(Buffer.from(await pdf.arrayBuffer()).subarray(0, 5).toString(), '%PDF-');
     const activeCard = $('[data-settings]').dataset.settings;
     $('#logout').click();
     $('#login-form').elements.token.value = 'reader-test';

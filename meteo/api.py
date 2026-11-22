@@ -18,9 +18,13 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from meteo.access import READABLE_DATASETS, pick_dataset
+from meteo.annotations import list_annotations, register_annotations
+from meteo.assistant_routes import register_chart_assistant
 from meteo.analytics import PERIODS, QC_REASONS, day_detail, describe_dataset, slice_data
 from meteo.atlas import reference_stations, station_catalog
+from meteo.business_report import business_report_pdf
 from meteo.connectors import WeatherRequest, open_meteo
+from meteo.decision_insights import decision_insights
 from meteo.grafana import dashboard_url, provision, shared_dataset
 from meteo.satellite import imagery, options as satellite_options
 from meteo.station_photos import register_station_photos
@@ -165,6 +169,8 @@ def create_app(root=None, *, demo=None, accounts=None):
         return user
 
     register_station_photos(app, current_store, actor)
+    register_annotations(app, current_store, actor)
+    register_chart_assistant(app, current_store, researcher)
 
     @app.exception_handler(ValueError)
     async def bad_input(_request, exc):
@@ -341,6 +347,11 @@ def create_app(root=None, *, demo=None, accounts=None):
         with current_store().connect() as db:
             return day_detail(db, pick_dataset(db, version, user), station, parameter, day)
 
+    @app.get('/api/datasets/{version}/insights')
+    def insights(version: str, station: str, parameter: str, start: date, end: date,
+                 step: str = 'day', user=Depends(actor)):
+        return decision_insights(series(version, station, parameter, start, end, step, user))
+
     @app.get('/api/datasets/{version}/export')
     def export(version: str, station: str, parameter: str, start: date, end: date,
                step: str = 'month', format: str = 'csv', user=Depends(actor)):
@@ -372,6 +383,7 @@ def create_app(root=None, *, demo=None, accounts=None):
     @app.post('/api/datasets/{version}/reports')
     def make_report(version: str, request: ReportOptions, user=Depends(actor)):
         with current_store().connect(write=True) as db:
+            source_version = version
             dataset = pick_dataset(db, version, user)
             if dataset['source'] == 'stream':
                 snapshot = sha256((version + ':' + str(dataset['row_count'])).encode()).hexdigest()[:32]
@@ -405,7 +417,9 @@ def create_app(root=None, *, demo=None, accounts=None):
                                    'measurement': body['measurement'], 'received_at': event['happened_at']})
             data.update(id=report_id, title=request.title, template=request.template,
                         metadata=json.loads(dataset['metadata']), freshness={'measurement': fresh[0], 'received': fresh[1]},
-                        events=events)
+                        events=events, insights=decision_insights(data),
+                        annotations=list_annotations(db, source_version, request.station, request.parameter,
+                                                     request.start, request.end))
             db.execute('INSERT INTO reports(id,owner,dataset,body) VALUES (?,?,?,?)',
                        (report_id, user['name'], version, canonical(data)))
             return data
@@ -419,6 +433,15 @@ def create_app(root=None, *, demo=None, accounts=None):
                 raise HTTPException(404, 'Отчёт не найден')
             pick_dataset(db, row['dataset'], user)
             return json.loads(row['body'])
+
+    @app.get('/api/reports/{report_id}/pdf')
+    def download_decision_report(report_id: str, user=Depends(actor)):
+        report = read_report(report_id, user)
+        analysis = report.get('insights') or decision_insights(report)
+        content = business_report_pdf(report, analysis, report.get('annotations', ()))
+        return Response(content, media_type='application/pdf',
+                        headers={'Content-Disposition': 'attachment; filename="decision-report.pdf"',
+                                 'Cache-Control': 'private, no-store'})
 
     @app.get('/api/satellite')
     def satellite_config(user=Depends(actor)):

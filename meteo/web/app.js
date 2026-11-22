@@ -3,6 +3,7 @@ import {humanAvatar, mountDatasetSettings} from './dataset-access.js';
 import {mountUIPrimitives, badgeHTML} from './ui-primitives.js';
 import {installFormControls} from './form-controls.js';
 import {mountObservationTools} from './vendor/dataset-dialog.js';
+import {mountDashboardTools} from './dashboard-tools.js';
 
 mountUIPrimitives(document);
 installFormControls(document.body);
@@ -20,7 +21,7 @@ const query = (values) => new URLSearchParams(values).toString();
 let token = sessionStorage.getItem('meteo-token') || '';
 let account, dict, datasets, selectedDataset, page, currentSlice, drawChart, streamCursor = 0;
 let atlasStationId, disposeStationAtlas, closeDatasetDialog;
-let closeColumnChooser, closeQualityRows;
+let closeColumnChooser, closeQualityRows, closeDashboardTools;
 let navigationVersion = 0;
 const deepLink = new URLSearchParams(location.search);
 const searchInput = $('#workspace-search');
@@ -83,6 +84,8 @@ let columns = [['period', 'Период'], ['value', 'Значение'], ['cove
 const availableColumns = [...columns, ['gaps', 'Длиннейший пропуск']];
 
 function closeObservationTools() {
+  closeDashboardTools?.();
+  closeDashboardTools = undefined;
   closeColumnChooser?.();
   closeQualityRows?.();
   closeColumnChooser = closeQualityRows = undefined;
@@ -260,9 +263,9 @@ async function analysis(selection) {
     setRange();
   }
   // Keep access to dataset explicit since HTMLElement.dataset also exists on the form.
-  const setSelection = (station, parameter, start, end) => {
+  const setSelection = (station, parameter, start, end, step = 'month') => {
     form.station.value = station; form.parameter.value = parameter;
-    form.start.value = start; form.end.value = end; form.step.value = 'month';
+    form.start.value = start; form.end.value = end; form.step.value = step;
   };
   const run = async () => {
     const filters = Object.fromEntries(new FormData(form));
@@ -284,6 +287,20 @@ async function analysis(selection) {
     };
     bind($('#january'), 'click', () => example(['AME60', 't_air', '1992-01-01', '2021-12-31']));
     bind($('#pressure'), 'click', () => example(['KR1', 'pressure_hpa', '2024-04-01', '2024-04-30']));
+  }
+  const april = datasets.find(item => item.parameters.includes('t_air') && item.source !== 'stream' &&
+    item.stations.some(row => row.station === 'KR2' && row.start.slice(0, 10) <= '2024-04-01' && row.end.slice(0, 10) >= '2024-04-30'));
+  if (april) {
+    const shortcut = document.createElement('button');
+    shortcut.type = 'button';
+    shortcut.textContent = 'Кр2 · суточный прогноз за апрель 2024';
+    $('#examples').append(shortcut);
+    bind(shortcut, 'click', async () => {
+      form.elements.dataset.value = april.id;
+      setData();
+      setSelection('KR2', 't_air', '2024-04-01', '2024-04-30', 'day');
+      await run();
+    });
   }
   bind(form, 'submit', run);
   bind(form.elements.dataset, 'change', async () => { setData(); await run(); });
@@ -381,12 +398,13 @@ function renderSlice(data) {
   const selected = datasets.find(d => d.id === data.dataset);
   actions.innerHTML = '<button id="csv">CSV</button><button id="json">JSON</button><button id="snapshot" class="primary">Создать отчёт</button>';
   $('#slice').innerHTML = `
-    <div class="cards">
+    <div id="dashboard-tools"></div>
+    <div class="cards" data-dashboard-panel="metrics">
       <section class="panel metric"><span>${point2010 ? 'Январь 2010' : 'Значение за период'}</span><strong>${fmt(headline, data.unit)}</strong><small>${escape(summary)}</small></section>
       <section class="panel metric"><span>Пригодные сутки</span><strong>${days}</strong><small>Покрытие выбранного параметра</small></section>
       <section class="panel metric"><span>${point2010 ? 'Среднее января за выбранный период' : 'Доступные агрегаты'}</span><strong>${point2010 ? fmt(january.value, data.unit) : data.coverage.valid_periods + ' / ' + data.coverage.periods}</strong><small>${point2010 ? january.year_count + ' лет · отклонение ' + fmt(point2010.deviation, data.unit) : escape(dict.periods[data.step])}</small></section>
     </div>
-    <section class="panel"><h2>${escape(dict.parameters[data.parameter].name)} · ${escape(dict.stations[data.station] || data.station)}</h2>
+    <section class="panel" data-dashboard-panel="chart"><h2>${escape(dict.parameters[data.parameter].name)} · ${escape(dict.stations[data.station] || data.station)}</h2>
       <p class="muted">${escape(data.start)} — ${escape(data.end)} · ${escape(data.unit)} · ${escape(dict.periods[data.step])}</p>
       <canvas class="chart" aria-label="График наблюдений. Та же выборка доступна в таблице."></canvas>
       <div class="actions"><span class="muted">Версия <code>${escape(data.dataset.slice(0, 12))}</code></span>
@@ -394,19 +412,31 @@ function renderSlice(data) {
         '<button id="share">' + (selected.visibility === 'shared' ? 'Выключить общее чтение' : 'Разрешить чтение всем в кабинете') + '</button>' : ''}
       ${selected?.source !== 'stream' ? '<button id="raw">Исходный файл</button>' : ''}</div>
     </section>
-    <div class="layout">
-      <section class="panel"><h2>Таблица наблюдений</h2><div id="series-table">${table(data, true)}</div>
+      <section class="panel" data-dashboard-panel="table"><h2>Таблица наблюдений</h2><div id="series-table">${table(data, true)}</div>
         <details><summary>Настроить столбцы</summary><div id="column-tools"></div></details>
       </section>
-      <section class="panel" id="quality"><h2>Контроль качества</h2><p>Выберите период или дату в таблице, чтобы открыть исходные строки.</p>
+      <section class="panel" id="quality" data-dashboard-panel="quality"><h2>Контроль качества</h2><p>Выберите период или дату в таблице, чтобы открыть исходные строки.</p>
         <p class="muted">Длиннейшие серии неполных суток</p>
         ${data.missing_runs.slice(0, 4).map(r => '<p><button class="text" data-quality="' + escape(r.start) + '">' +
           escape(r.start) + ' — ' + escape(r.end) + '</button> · ' + r.days + ' сут.</p>').join('') || '<p>Серий нет.</p>'}
         <p class="muted">Шаг исходных наблюдений, мин</p><p>${data.intervals_minutes.slice(0, 5).map(([step, count]) => step + ': ' + fmt(count)).join(' · ') || '—'}</p>
-      </section>
-    </div>`;
+      </section>`;
   const canvas = $('.chart', $('#slice'));
-  drawChart = () => displayChart(canvas, data.points);
+  const sliceHost = $('#slice');
+  function applyPanels(names) {
+    const panels = $$('[data-dashboard-panel]', sliceHost);
+    panels.forEach(panel => { panel.hidden = !names.includes(panel.dataset.dashboardPanel); });
+    const ordered = names.map(name => panels.find(panel => panel.dataset.dashboardPanel === name)).filter(Boolean);
+    for (const panel of ordered) sliceHost.append(panel);
+    drawChart?.();
+  }
+  drawChart = () => {
+    if (account.role === 'research' && closeDashboardTools?.redraw) closeDashboardTools.redraw();
+    else displayChart(canvas, data.points);
+  };
+  closeDashboardTools = mountDashboardTools($('#dashboard-tools'), {api, data, account, canvas, applyPanels,
+    onQuality: day => loadQuality(day).catch(error => message(error.message)),
+  });
   drawChart();
   function bindQuality() {
     $$('[data-quality]', $('#slice')).forEach(button => bind(button, 'click', () => loadQuality(button.dataset.quality)));
@@ -636,8 +666,17 @@ async function reportsPage() {
 }
 
 function renderReport(data) {
-  actions.innerHTML = '<button id="print" class="primary">Печать</button>';
+  actions.innerHTML = '<button id="decision-pdf" class="primary">Скачать PDF для руководителя</button><button id="print">Печать</button>';
   bind($('#print'), 'click', () => window.print());
+  bind($('#decision-pdf'), 'click', async () => {
+    const response = await api('/api/reports/' + encodeURIComponent(data.id) + '/pdf', {raw: true});
+    const url = URL.createObjectURL(await response.blob());
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'Метеосводка-' + data.station + '-' + data.end + '.pdf';
+    link.click();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  });
   $('#report').innerHTML = `<section class="panel"><h2>${escape(data.title)}</h2>
     <p>${escape(data.template)} · ${escape(data.name)} · ${escape(dict.stations[data.station] || data.station)}</p>
     <p>${escape(data.start)} — ${escape(data.end)} · ${escape(data.unit)} · ${escape(dict.periods[data.step])}</p>

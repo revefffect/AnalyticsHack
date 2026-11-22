@@ -14,7 +14,7 @@ from tools.build_station_demo import archive_slice, SOKOL
 
 with TemporaryDirectory() as directory:
     store = Store(directory)
-    payload = archive_slice(SOKOL, '2024-04-01', '2024-04-03')
+    payload = archive_slice(SOKOL, '2024-04-01', '2024-04-30')
     digest = store.save_blob('research', 'Кр1 и Кр2.zip', payload)
     import_upload(store, 'research', digest, name='Архив наблюдений Кр1 и Кр2', source='station')
     accounts = {'research': {'token': 'editor-test', 'role': 'research'},

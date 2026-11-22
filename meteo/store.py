@@ -5,6 +5,8 @@ from pathlib import Path
 import sqlite3
 from time import monotonic, sleep
 
+from meteo.annotation_schema import SCHEMA_V4
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS datasets (
     id TEXT PRIMARY KEY, owner TEXT NOT NULL, name TEXT NOT NULL,
@@ -92,7 +94,7 @@ class Store:
         self.raw.mkdir(parents=True, exist_ok=True)
         self.db = self.root / 'meteo.sqlite3'
         with self.connect() as db:
-            if db.execute('PRAGMA user_version').fetchone()[0] >= 3:
+            if db.execute('PRAGMA user_version').fetchone()[0] >= 4:
                 return
             enable_wal(db)
             db.execute('BEGIN IMMEDIATE')
@@ -106,7 +108,10 @@ class Store:
                 db.execute(SCHEMA_V2)
             if version < 3:
                 db.execute(SCHEMA_V3)
-                db.execute('PRAGMA user_version=3')
+            if version < 4:
+                for statement in SCHEMA_V4:
+                    db.execute(statement)
+                db.execute('PRAGMA user_version=4')
 
     @contextmanager
     def connect(self, *, write=False):

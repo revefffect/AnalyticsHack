@@ -17,6 +17,7 @@ from zipfile import ZipFile, ZipInfo
 from fastapi.testclient import TestClient
 
 from meteo.api import create_app
+from meteo.chart_workspace import ChartDraft, ChartSettings, local_guide
 from meteo.importer import import_upload
 from meteo.store import Store
 
@@ -24,7 +25,7 @@ from meteo.store import Store
 ROOT = Path(__file__).resolve().parents[1]
 WEB = ROOT / 'meteo/web'
 DESTINATION = ROOT / 'docs/demo/station-atlas.html'
-PEOPLE = ['Анна', 'Карина', 'Никита', 'Антон']
+PEOPLE = ['Анна', 'Карина', 'Никита', 'Антон', 'Alex']
 ARCHIVE = ROOT / 'data/raw/meteo_hack_dataset.zip'
 SOKOL = ['sokol_m1/kr1_2024.csv', 'sokol_m1/kr2_2024.csv']
 SAMPLES = [
@@ -89,7 +90,8 @@ def sampled_responses():
             images = {f'{area}|{layer}': get('/api/satellite/imagery', params={
                 'area': area, 'layer': layer, 'day': reference_day})
                 for area in satellite['areas'] for layer in satellite['layers']}
-            quality, downloads, formats = {}, {}, {}
+            quality, downloads, formats, insights = {}, {}, {}, {}
+            report_pdf = None
             preview = None
             series = {}
             for dataset in fixtures['/api/datasets']:
@@ -115,19 +117,38 @@ def sampled_responses():
                                   'start': station['start'][:10], 'end': station['end'][:10]}
                         key = '|'.join((base + '/series', station['station'], step))
                         series[key] = get(base + '/series', params=params)
+                        insights[key] = get(base + '/insights', params=params)
                         csv_response = client.get(base + '/export', params={**params, 'format': 'csv'})
                         csv_response.raise_for_status()
                         formats[key] = csv_response.text
-                        if not fixtures['/api/reports']:
-                            report = client.post(base + '/reports', json={**params, 'title': 'Обзор температуры воздуха',
-                                                                         'template': 'Обзор наблюдений'})
+                        if dataset['name'] == SAMPLES[1][0] and params['station'] == 'KR1' and step == 'day':
+                            report = client.post(base + '/reports', json={**params,
+                                'title': 'Температура на Кр1 за апрель 2024 года',
+                                'template': 'Операционная сводка'})
                             report.raise_for_status()
-                            # The standalone snapshot keeps a stable ID for the original saved report.
-                            report = {**report.json(), 'id': 'archive-summary'}
+                            # Stabilize this generated fixture before exporting its precise PDF.
+                            original_report = report.json()
+                            report = {**original_report, 'id': 'archive-summary'}
+                            with store.connect(write=True) as db:
+                                db.execute("UPDATE reports SET id=?, body=?, created_at=? WHERE id=?",
+                                           (report['id'], json.dumps(report, ensure_ascii=False),
+                                            '2024-07-08 12:00:00', original_report['id']))
                             fixtures['/api/reports/archive-summary'] = report
                             fixtures['/api/reports'] = [{'id': report['id'], 'title': report['title'],
                                                          'dataset': dataset['id'], 'created_at': '2024-07-08 12:00:00'}]
+                            pdf = client.get('/api/reports/archive-summary/pdf')
+                            pdf.raise_for_status()
+                            assert pdf.content.startswith(b'%PDF-')
+                            report_pdf = base64.b64encode(pdf.content).decode('ascii')
+    if not report_pdf:
+        raise ValueError('April KR1 management report was not generated')
+    presets = {kind: local_guide(text, ChartSettings()).model_dump(exclude_none=True)
+               for kind, text in {'line': 'покажи линию', 'bar': 'покажи столбцы',
+                                  'scatter': 'покажи точки точками', 'histogram': 'покажи гистограмму',
+                                  'panels': 'оставь только график и таблицу', 'help': 'уточните'}.items()}
     return {'fixtures': fixtures, 'sampleSeries': series, 'sampleQuality': quality, 'csvExports': formats,
+            'sampleInsights': insights, 'reportPdf': report_pdf, 'chartPresets': presets,
+            'defaultChart': ChartDraft().model_dump(mode='json'),
             'satelliteLayers': images, 'rawArchives': downloads, 'sampleUpload': preview}
 
 
