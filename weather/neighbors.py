@@ -3,14 +3,14 @@ from datetime import date
 from statistics import median
 
 from . import reports
+from .imports import RESERVE_SHA
 
-ARCHIVE_SHA = "8c574c518617aea0f301997c62dfe75dc09b059abca1cdbd268645a3cd6cc33d"
 METHOD = "sokol-daily-seasonal-median-v1"
 SEASONS = ((12, 1, 2), (3, 4, 5), (6, 7, 8), (9, 10, 11))
 
 
 def features(manifest):
-    if manifest["sha256"] != ARCHIVE_SHA:
+    if manifest["sha256"] != RESERVE_SHA:
         return []
     files = {}
     for path, choice in manifest["mappings"].items():

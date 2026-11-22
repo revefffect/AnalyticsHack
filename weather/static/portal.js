@@ -1,4 +1,4 @@
-"use strict";
+import {mountStationAtlas} from './station-atlas.js';
 
 const $ = (id) => document.getElementById(id);
 const state = {user:null, catalog:[], external:[], preview:null, report:null, selection:null, reportRequest:0, eventsRequest:0};
@@ -38,7 +38,13 @@ const statuses = {
   observed:"Пригодное наблюдение", absent_column:"Колонка отсутствует", empty:"Пустая ячейка", flagged:"Исключено по флагу",conflict:"Конфликт срока",
   direction_sectors:"Направления по секторам",unknown:"Неизвестен",live:"Живой поток",firing:"Превышение"
 };
-const titles = {catalog:"Каталог наборов", import:"Импорт наблюдений", report:"Отчёт по наблюдениям", events:"Уведомления"};
+const titles = {catalog:"Каталог наборов", atlas:"Атлас станций", import:"Импорт наблюдений", report:"Отчёт по наблюдениям", events:"Уведомления"};
+const questionTitles = {
+  pressure:"Почему у Кр1 за апрель 2024 есть температура, а давление отсутствует?",
+  january:"Насколько холодным был январь 2010 года?",
+  neighbors:"Где в 2025 году можно оценить пропуски Кр2?"
+};
+let disposeAtlas, atlasSites=[];
 const esc = encodeURIComponent;
 const isResearcher = () => ["research","researcher","owner","admin"].includes(state.user?.role);
 const num = new Intl.NumberFormat("ru-RU", {maximumFractionDigits:2});
@@ -54,7 +60,7 @@ function display(value) {
   if (typeof value === "boolean") return value ? "Да" : "Нет";
   if (Array.isArray(value)) return value.map(display).join(", ") || "—";
   if (typeof value === "object") return Object.entries(value).map(([k,v]) => (names[k] || k) + " · " + display(v)).join(" / ") || "—";
-  return statuses[value] || fields[value] || stations[String(value).toLowerCase()] || String(value);
+  return statuses[value] || fields[value] || String(value);
 }
 function safeLink(label, href, css) {
   if (typeof href !== "string" || !href.trim()) return null;
@@ -119,9 +125,26 @@ function openTab(tab) {
   for (const id of Object.keys(titles)) $(id).hidden=id!==tab;
   document.querySelectorAll("[data-tab]").forEach(b=>{if(b.dataset.tab===tab)b.setAttribute("aria-current","page");else b.removeAttribute("aria-current");});
   $("page-title").textContent=titles[tab];
+  const url=new URL(location.href);
+  if(tab==="atlas"){
+    state.reportRequest++;
+    disposeAtlas?.();
+    disposeAtlas=mountStationAtlas($("atlas"),atlasSites,{
+      initial:url.searchParams.get("site"), parameterLabel:key=>fields[key] || key,
+      select:id=>history.replaceState(null,"",location.pathname+"?"+new URLSearchParams({tab:"atlas",site:id})),
+      questionButton:site=>site.question && button(questionTitles[site.question],async()=>{
+        openTab("report");
+        await answerQuestion(site.selection,site.question);
+      },"primary")
+    });
+  } else {
+    disposeAtlas?.();disposeAtlas=null;$("atlas").replaceChildren();
+    if(url.searchParams.get("tab")==="atlas")history.replaceState(null,"",location.pathname);
+  }
   if (tab==="events") void busy(null,refreshEvents);
 }
 function signedOut() {
+  disposeAtlas?.();disposeAtlas=null;atlasSites=[];$("atlas").replaceChildren();
   state.user=null; state.catalog=[]; state.external=[]; state.preview=null; state.report=null; state.selection=null;
   state.reportRequest++; state.eventsRequest++;
   $("workspace").hidden=true; $("login").hidden=false; $("account").hidden=true;
@@ -138,7 +161,7 @@ async function loadWorkspace() {
   const params=new URL(location.href).searchParams;
   if (saved) { openTab("report"); await openSaved(saved); }
   else if(params.has("dataset")) {openTab("report");await openReportLink(params);}
-  else openTab("catalog");
+  else openTab(params.get("tab")==="atlas"?"atlas":"catalog");
 }
 onForm("login-form",async()=>{await api("/session",{method:"POST",body:{token:$("token").value}});$("token").value="";await loadWorkspace();});
 $("logout").addEventListener("click",()=>busy($("logout"),async()=>{await api("/session",{method:"DELETE"});history.replaceState(null,"",location.pathname);signedOut();}));
@@ -150,7 +173,7 @@ function stationParameters(prefix) {
   const st=$(prefix+"station"), p=$(prefix+"parameter");
   const defaultStation=d?.stations?.includes("kr1")?"kr1":undefined;
   const defaultParameter=d?.parameters?.includes("t_air")?"t_air":undefined;
-  options(st,d?.stations || [],stations,st.value || defaultStation); options(p,d?.parameters || [],fields,p.value || defaultParameter);
+  options(st,d?.stations || [],d?.station_labels || {},st.value || defaultStation); options(p,d?.parameters || [],fields,p.value || defaultParameter);
   if(!prefix && Array.isArray(d?.period) && d.period.length===2) {
     const [first,last]=d.period, month=$("month");
     if(month.value<first || month.value>last) month.value=first;
@@ -161,22 +184,15 @@ function stationParameters(prefix) {
 function renderQuestions() {
   const box=$("archive-questions");
   box.replaceChildren();
-  const presets=[
-    ["pressure","Почему у Кр1 за апрель 2024 есть температура, а давление отсутствует?"],
-    ["january","Насколько холодным был январь 2010 года?"],
-    ["neighbors","Где в 2025 году можно оценить пропуски Кр2?"]
-  ];
-  for(const [key,title] of presets) {
-    const available=d=>d?.connected!==false && d?.archive_features?.includes(key);
-    const current=dataset($("dataset").value);
-    const source=available(current)?current:state.catalog.find(available);
-    if(source) box.append(button(title,()=>answerQuestion(source,key),"text-btn"));
+  const source=dataset($("dataset").value);
+  for(const [key,title] of Object.entries(questionTitles)) {
+    if(source?.connected && source.archive_features.includes(key)) box.append(button(title,()=>answerQuestion(source,key),"text-btn"));
   }
   box.hidden=!box.childElementCount;
 }
 
 async function answerQuestion(source,key) {
-  $("dataset").value=source.id;stationParameters("");
+  $("dataset").value=source.dataset || source.id;stationParameters("");
   const january=key==="january", gaps=key==="neighbors";
   periodMode(gaps?"range":"month");
   $("station").value=january?"ame60":gaps?"kr2":"kr1";
@@ -184,7 +200,7 @@ async function answerQuestion(source,key) {
   $("step").value="day";$("report-template").value="weather";
   $("month").value=january?"2010-01":"2024-04";
   if(gaps){$("range-start").value="2025-01-01";$("range-end").value="2025-12-31";}
-  const r=await loadReport({...reportFilters(),version:source.version});
+  const r=await loadReport({...reportFilters(),version:source.version,revision:source.revision});
   if(!r || state.report!==r)return;
   if(gaps){await showEstimates();return;}
   const sel=state.selection, box=$("question-answer");
@@ -209,6 +225,7 @@ async function answerQuestion(source,key) {
 async function refreshCatalog() {
   const result=await api("/catalog");
   state.catalog=result.datasets || []; state.external=result.external || [];
+  atlasSites=result.station_atlas || [];
   const types=[...new Set([...state.catalog,...state.external].map(d=>d.data_type || d.kind || "station"))];
   options($("catalog-type"),[{id:"",title:"Все типы"},...types.map(id=>({id,title:display(id)}))],{},$("catalog-type").value);
   for (const prefix of ["","rule-"]) {
@@ -219,12 +236,12 @@ async function refreshCatalog() {
 function dataCard(d) {
   const card=el("article",null,"dataset"), bar=el("div",null,"actions");
   card.append(el("h3",d.title || d.name || d.id));
-  card.append(facts([["Поставщик",d.provider || d.owner],["Территория",d.territory],["Станции",d.stations],
+  card.append(facts([["Поставщик",d.provider || d.owner],["Территория",d.territory],["Станции",d.stations.map(s=>d.station_labels[s])],
     ["Период",d.period || d.range || [d.start,d.end].filter(Boolean).join(" – ")],["Показатели",d.parameters],["Разрешение",d.resolution],
     ["Тип",d.data_type || d.kind],["Формат",d.format],["Полнота",d.completeness || d.coverage],["Обновление",d.updated_at],
     ["Версия",d.version],["Условия",d.license || d.terms],["Доступ",d.public?"Опубликован":"По разрешению"]]));
   if(d.connected!==false)bar.append(button("Открыть отчёт",async()=>{ $("dataset").value=d.id; stationParameters(""); openTab("report"); await loadReport(); },"primary"));
-  if (!isResearcher() && !d.connected && d.public) bar.append(button("Подключить",async()=>{await api("/datasets/"+esc(d.id)+"/connect",{method:"POST"});await refreshCatalog();notify("Набор подключён.");},"primary"));
+  if (!isResearcher() && (!d.connected || d.update_available) && d.public) bar.append(button(d.update_available?"Подключить новую версию":"Подключить",async()=>{await api("/datasets/"+esc(d.id)+"/connect",{method:"POST"});await refreshCatalog();notify("Набор подключён.");},"primary"));
   if (isResearcher() && !d.public && d.can_publish!==false) bar.append(button("Опубликовать",async()=>{
     if(!window.confirm("Открыть этот набор для подключения другим участникам платформы?")) return;
     await api("/datasets/"+esc(d.id)+"/publish",{method:"POST"});await refreshCatalog();notify("Набор опубликован.");
@@ -289,8 +306,8 @@ function renderMapping(file,index) {
   const draw=()=>{
     if(!details.open || panel.childNodes.length)return;
     const mappings=el("div",null,"form-grid"), stationLabel=el("label","Станция"), select=el("select");
-    options(select,[{id:"",title:"Выберите станцию"},...Object.entries(stations).map(([id,title])=>({id,title}))],{},file.station || "");
-    select.onchange=()=>{file.station=select.value;};stationLabel.append(select);mappings.append(stationLabel);
+    options(select,[{id:"",title:"Выберите станцию"},...Object.keys(stations).map(id=>({id,title:state.preview.reserve_archive?stations[id]:id.toUpperCase()}))],{},file.station || "");
+    select.onchange=()=>{file.station=select.value;stationGroups();};stationLabel.append(select);mappings.append(stationLabel);
     for(const [key,title] of Object.entries(fields)) {
       const lbl=el("label",title+(file.units?.[key]?" · "+file.units[key]:"")), input=el("select");
       options(input,[{id:"",title:"Пропустить"},...file.columns],{},file.mapping[key] || "");
@@ -301,9 +318,24 @@ function renderMapping(file,index) {
     if(file.sample?.length) panel.append(gridTable(file.columns.map(key=>({key,title:key})),file.sample));
     panel.append(mappings);
   };
-  const include=el("input");include.type="checkbox";include.checked=file.included;include.addEventListener("change",()=>{file.included=include.checked;});
+  const include=el("input");include.type="checkbox";include.checked=file.included;include.addEventListener("change",()=>{file.included=include.checked;stationGroups();});
   const includeBox=el("div",null,"input-row"),includeLabel=el("label");includeLabel.append(include,document.createTextNode("Импортировать лист или файл"));includeBox.append(includeLabel);
   details.append(summary,includeBox,panel);details.ontoggle=draw;details.open=index===0 || !file.station || !file.mapping.datetime;draw();return details;
+}
+function stationGroups() {
+  const box=$("station-groups"), preview=state.preview;
+  box.replaceChildren();
+  const groups=new Map();
+  for(const file of preview.files.filter(f=>f.included && f.station)){
+    if(!groups.has(file.station))groups.set(file.station,[]);
+    groups.get(file.station).push(file.name);
+  }
+  for(const [code,files] of groups){
+    if(files.length<2 || (preview.reserve_archive && files.every(f=>f.split("/").pop().split("_")[0]===code)))continue;
+    const label=el("label"),check=el("input");check.type="checkbox";check.value=code;check.required=true;
+    label.append(check,document.createTextNode("Объединить таблицы одной станции "+code.toUpperCase()+" · "+files.join(", ")));
+    box.append(label,el("p","Если это разные станции, отметьте для импорта таблицы одной станции и повторите импорт для другой.","hint"));
+  }
 }
 function previewTables() {
   const p=state.preview,mapping=$("file-mappings");mapping.replaceChildren();
@@ -324,6 +356,7 @@ function previewTables() {
     label.append(sel);mapping.append(label);
   }
   p.files.forEach((f,i)=>mapping.append(renderMapping(f,i)));
+  stationGroups();
 }
 function showPreview(result) {
   state.preview=result; state.preview.files=state.preview.files.map(f=>({...f,mapping:{...f.mapping},included:true}));
@@ -349,7 +382,8 @@ onForm("confirm-form",async()=>{
   }
   const template=$("template").value.trim();
   notify("Обрабатываем выбранные таблицы…");
-  const result=await api("/imports/"+esc(p.id)+"/confirm",{method:"POST",body:{title:$("import-title").value.trim(),files,...(template?{template}:{})}});
+  const combine_stations=Array.from($("station-groups").querySelectorAll("input:checked"),input=>input.value);
+  const result=await api("/imports/"+esc(p.id)+"/confirm",{method:"POST",body:{title:$("import-title").value.trim(),files,combine_stations,...(template?{template}:{})}});
   state.preview=null;$("confirm-form").hidden=true;await refreshCatalog();$("dataset").value=result.id;stationParameters("");
   openTab("report");notify(result.repeated?"Эта версия уже была импортирована.":"Версия сохранена.");await loadReport();
 });
@@ -428,7 +462,14 @@ async function openReportLink(params) {
   const id=params.get("dataset"), d=dataset(id);if(!d || d.connected===false)throw Error("Для открытия этой ссылки требуется доступ к версии набора.");
   $("dataset").value=id;stationParameters("");
   const mode=params.has("start")?"range":"month";periodMode(mode);
-  for(const key of ["station","parameter","step"])if(params.has(key))$(key).value=params.get(key);
+  for(const key of ["station","parameter","step"])if(params.has(key)){
+    const value=params.get(key), select=$(key);
+    if(params.get("version") && params.get("version")!==d.version && key!=="step" &&
+        !Array.from(select.options).some(o=>o.value===value)){
+      select.add(new Option(key==="parameter" ? fields[value] || value : value.toUpperCase(),value));
+    }
+    select.value=value;
+  }
   if(mode==="range"){$("range-start").value=params.get("start");$("range-end").value=params.get("end")||"";}
   else if(params.has("month"))$("month").value=params.get("month");
   const sel=reportFilters();
@@ -472,7 +513,7 @@ function renderReport(savedId) {
   $("quality").hidden=Boolean(savedId || sel.start);$("print").hidden=Boolean(sel.start);
   $("profile-data").replaceChildren();$("evidence-data").replaceChildren();$("saved-link").replaceChildren();
   $("report-title").textContent=fields[sel.parameter] || r.title || "Отчёт по наблюдениям";
-  $("report-subtitle").textContent=[d?.title || r.title,display(sel.station),sel.start?sel.start+" — "+sel.end:sel.month].filter(Boolean).join(" · ");
+  $("report-subtitle").textContent=[d?.title || r.title,d?.station_labels?.[sel.station] || sel.station,sel.start?sel.start+" — "+sel.end:sel.month].filter(Boolean).join(" · ");
   const s=r.summary || {};
   const chosen=["value","valid","expected","station_valid_days","status"];
   const qualityTemplate=(r.template || sel.template)==="quality" && !sel.start;

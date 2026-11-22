@@ -17,7 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from . import auth, charts, external, imports, neighbors, ranges, reports, store, stream
+from . import atlas, auth, charts, external, imports, neighbors, ranges, reports, store, stream
 
 STATIC=Path(__file__).parent/"static"
 ARCHIVE=store.ROOT/"data/raw/meteo_hack_dataset.zip"
@@ -116,33 +116,42 @@ class Confirmation(BaseModel):
     files:list[Choice]=Field(min_length=1,max_length=500)
     template:str|None=Field(default=None,max_length=80)
     dataset:str|None=None
+    combine_stations:list[str]=Field(default_factory=list,max_length=10)
 
 
 @app.post("/portal/imports/{key}/confirm")
 def confirm(request:Request,key:str,body:Confirmation):
-    return imports.confirm(auth.writer(request),key,body.title,[f.model_dump() for f in body.files],body.template,body.dataset)
+    return imports.confirm(auth.writer(request),key,body.title,[f.model_dump() for f in body.files],body.template,body.dataset,body.combine_stations)
 
 
 @app.get("/portal/catalog")
 def catalog(request:Request,q:str="",station:str="",parameter:str=""):
     actor=auth.actor(request)
     items=[]
+    station_cards=[]
     with store.db().connect() as con:
         for d in store.many(con,"SELECT * FROM datasets WHERE owner=:a OR public=1 ORDER BY title",a=actor):
-            _,v,m,created=reports.visible(con,actor,d["id"],catalogue=True)
+            try:
+                _,v,m,created=reports.visible(con,actor,d["id"])
+                connected=True
+            except LookupError:
+                _,v,m,created=reports.visible(con,actor,d["id"],catalogue=True)
+                connected=False
             stations=list(m["station_parameters"])
             params=sorted({p for group in m["station_parameters"].values() for p in group})
             periods=sorted(k.split("/")[1] for k in m["partitions"])
-            connected=store.one(con,"SELECT version FROM connections WHERE dataset=:d AND actor=:a AND version=:v",d=d["id"],a=actor,v=v)
-            card={**d,"public":bool(d["public"]),"connected":bool(connected) or d["owner"]==actor,"stations":stations,"parameters":params,
-                  "archive_features":neighbors.features(m),
+            features=neighbors.features(m)
+            card={**d,"version":v,"update_available":connected and v!=d["version"],"public":bool(d["public"]),"connected":connected,"stations":stations,"parameters":params,
+                  "station_labels":{s:atlas.station_label(m,s) for s in stations},"archive_features":features,
                   "period":[periods[0],periods[-1]],"provider":m["source"].get("provider","Владелец набора"),"updated_at":created,
                   "data_type":m["source"].get("data_type","station"),"format":m["input"].rsplit(".",1)[-1],"count":sum(m["counts"].values()),
                   "territory":m["source"].get("territory","Указана в исходнике" if m["source"].get("coordinates") else "Не указана"),
                   "resolution":"Сроки источника","completeness":"По станции и показателю в отчёте","terms":m["source"].get("license","По разрешению владельца")}
             if q.casefold() in card["title"].casefold() and (not station or station in stations) and (not parameter or parameter in params):
                 items.append(card)
-    return {"datasets":items,"external":external.SOURCE_CARDS}
+                if connected:
+                    station_cards.extend(atlas.stations(actor,d,v,m,features))
+    return {"datasets":items,"external":external.SOURCE_CARDS,"station_atlas":station_cards+atlas.references()}
 
 
 @app.post("/portal/datasets/{ds}/publish")

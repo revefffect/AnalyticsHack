@@ -6,6 +6,7 @@ import unittest
 from datetime import datetime,timedelta,timezone
 from pathlib import Path
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 from zipfile import ZipFile
 
 from fastapi.testclient import TestClient
@@ -99,11 +100,71 @@ class Platform(unittest.TestCase):
         self.client.post(f"/portal/datasets/{ds}/publish?public=false",headers=self.owner)
         self.assertEqual(self.client.get("/portal/saved/"+saved["id"],headers=self.business).status_code,404)
 
+    def test_atlas_keeps_matching_codes_and_granted_versions_separate(self):
+        def read(role):
+            response=self.client.get("/portal/catalog",headers=role)
+            response.raise_for_status()
+            return [s for s in response.json()["station_atlas"] if "selection" in s]
+
+        def upload(value, dataset=None):
+            data=HEAD+"".join(f"2024-04-01 {h:02}:00,{value},995,\n" for h in range(24))
+            return self.confirm(self.preview("kr1.csv",data.encode()),dataset=dataset)
+
+        cold,warm=upload(-7),upload(12)
+        cards=read(self.owner)
+        self.assertEqual(len({s["id"] for s in cards}),2)
+        self.assertEqual(read(self.business),[])
+        for s in cards:
+            p=s["selection"]
+            self.assertEqual((s["name"],s["location_kind"],s["question"],s["records"]),("KR1","unknown",None,24))
+            self.assertEqual(parse_qs(urlsplit(s["report_url"]).query),{k:[str(v)] for k,v in p.items()})
+            graph=urlsplit(s["grafana_url"])
+            self.assertEqual(graph.path,"/charts/research/d/w-"+p["dataset"]+"/weather")
+            self.assertEqual(parse_qs(graph.query),{"var-"+k:[str(v)] for k,v in p.items()})
+            rows=self.query(p["dataset"],version=p["version"]).json()["rows"]
+            chart=self.client.get("/portal/chart-data/"+p["dataset"],params=p,headers={"x-weather-key":"test-owner-chart"})
+            self.assertEqual(chart.json(),rows)
+            self.assertEqual(rows[0]["value"],-7 if p["dataset"]==cold["id"] else 12)
+        self.allow(cold["id"])
+        new=upload(-9,cold["id"])
+        self.assertEqual(read(self.business)[0]["selection"]["version"],cold["version"])
+        self.assertEqual(len(read(self.business)),1)
+        self.assertIn("/charts/business/",read(self.business)[0]["grafana_url"])
+        self.assertEqual(self.query(warm["id"],self.business).status_code,404)
+        self.assertEqual(self.query(cold["id"],version=warm["version"]).status_code,404)
+        self.assertEqual(self.query(cold["id"],self.business,version=new["version"]).status_code,404)
+        self.allow(cold["id"])
+        self.assertEqual(read(self.business)[0]["selection"]["version"],new["version"])
+        self.client.post("/portal/datasets/"+cold["id"]+"/publish?public=false",headers=self.owner).raise_for_status()
+        self.assertEqual(read(self.business),[])
+
+    def test_zip_same_code_requires_identity_or_separate_imports(self):
+        raw=io.BytesIO()
+        with ZipFile(raw,"w") as archive:
+            for site,value in (("north",-7),("south",12)):
+                archive.writestr(site+"/kr1.csv",HEAD+"".join(f"2024-04-01 {h:02}:00,{value},995,\n" for h in range(24)))
+        p=self.preview("stations.zip",raw.getvalue())
+        choices=[{k:f[k] for k in ("name","station","mapping")} for f in p["files"]]
+        path="/portal/imports/"+p["id"]+"/confirm"
+        body={"title":"Тест","files":choices}
+        self.assertEqual(self.client.post(path,json=body,headers=self.owner).status_code,422)
+        ids=[self.confirm(p,[choice])["id"] for choice in choices]
+        self.assertEqual(len(set(ids)),2)
+        self.assertEqual([self.query(ds).json()["rows"][0]["value"] for ds in ids],[-7,12])
+        self.assertEqual(self.confirm(p,choices[:1])["id"],ids[0])
+        merged=self.client.post(path,json={**body,"combine_stations":["kr1"]},headers=self.owner)
+        merged.raise_for_status()
+        self.assertEqual(merged.json()["count"],48)
+        self.assertNotIn(merged.json()["id"],ids)
+
     def test_archive_oracles_and_partial_range(self):
         raw=(ROOT/"data/raw/meteo_hack_dataset.zip").read_bytes()
         p=self.preview("archive.zip",raw)
         parts=[{k:f[k] for k in ("name","mapping","station")} for f in p["files"] if f["name"].endswith(("kr1_2024.csv","ame60_2010.csv"))]
         ds=self.confirm(p,parts)["id"]
+        atlas=self.client.get("/portal/catalog",headers=self.owner).json()["station_atlas"]
+        self.assertEqual({s["question"] for s in atlas if s["location_kind"]=="area"},{"pressure","january"})
+        self.assertEqual({s["code"] for s in atlas if s["location_kind"]=="reference"},{"RU-Fyo","RU-Fy2"})
         rep=self.query(ds,parameter="pressure_hpa").json()
         self.assertEqual((rep["summary"]["valid"],rep["summary"]["value"],rep["summary"]["longest_gap"]),(2,None,28))
         self.assertEqual(round(self.query(ds,station="ame60",month="2010-01").json()["summary"]["value"],2),-15.20)

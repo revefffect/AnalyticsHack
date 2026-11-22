@@ -16,6 +16,7 @@ from . import store
 LIMIT = 64 * 1024 * 1024
 EXPANDED = 256 * 1024 * 1024
 STATIONS = {"ame60", "kr1", "kr2"}
+RESERVE_SHA = "8c574c518617aea0f301997c62dfe75dc09b059abca1cdbd268645a3cd6cc33d"
 UNITS = {"t_air": "°C", "pressure_hpa": "гПа", "rh": "%", "wind_speed": "м/с", "wind_gust": "м/с",
          "wind_dir": "°", **{k: "°C" for k in ("soil_05", "soil_10", "soil_20")}}
 BOUNDS = {"t_air": (-50, 45), "pressure_hpa": (940, 1050), "rh": (0, 100), "wind_speed": (0, 60),
@@ -29,6 +30,12 @@ for name in UNITS:
 def station_from(name):
     match = re.search(r"(ame60|kr1|kr2)(?:_|\.|$)", PurePosixPath(name.lower()).name)
     return match.group(1) if match else None
+
+
+def reserve_mapping(sha, mappings, station):
+    files = [name for name, choice in mappings.items() if choice["station"] == station]
+    return sha == RESERVE_SHA and bool(files) and all(
+        PurePosixPath(name).name.split("_", 1)[0] == station for name in files)
 
 
 def zip_check(z):
@@ -132,7 +139,7 @@ def prepare(owner, filename, data, metadata=None):
         store.execute(con,"INSERT INTO previews VALUES (:k,:owner,:sha,:f,:meta) ON CONFLICT DO NOTHING",
                       k=key,owner=owner,sha=sha,f=filename,meta=store.packed(info))
         templates = store.many(con,"SELECT name,mappings FROM templates WHERE owner=:owner",owner=owner)
-    return {"id":key,"files":files,"filename":filename,"source_sha256":sha,
+    return {"id":key,"files":files,"filename":filename,"source_sha256":sha,"reserve_archive":sha==RESERVE_SHA,
             "templates":{t["name"]:json.loads(t["mappings"]) for t in templates}}
 
 
@@ -160,7 +167,7 @@ def normalized(row, mapping):
     return dt.isoformat(sep=" ",timespec="seconds"), values, sorted(flags)
 
 
-def confirm(owner, key, title, selected, template=None, dataset=None):
+def confirm(owner, key, title, selected, template=None, dataset=None, combine_stations=()):
     with store.db().connect() as con:
         draft = store.one(con,"SELECT * FROM previews WHERE id=:id AND owner=:o",id=key,o=owner)
     if not draft:
@@ -181,14 +188,23 @@ def confirm(owner, key, title, selected, template=None, dataset=None):
             raise ValueError(f"{name}: проверьте соответствие колонок.")
     source_identity=info["source"].get("series_sha256") if external else info["source"]
     fingerprint = store.digest(store.packed([draft["raw_hash"],config,source_identity,"normalize-v1"]).encode())
-    dataset = dataset or store.digest(store.packed([owner,key]).encode())[:20]
-    version = store.digest((dataset+fingerprint).encode())[:32]
+    # A subset of a user archive is a separate import. Two selections may each contain a KR1.
+    implicit_id = store.digest(store.packed([owner,key]).encode())[:20]
     with store.db().connect() as con:
+        if dataset is None and set(config) != set(files):
+            legacy_version = store.digest((implicit_id+fingerprint).encode())[:32]
+            if not store.one(con,"SELECT id FROM versions WHERE dataset=:d AND id=:v",d=implicit_id,v=legacy_version):
+                implicit_id = store.digest(store.packed([owner,key,sorted(config)]).encode())[:20]
+        dataset = dataset or implicit_id
+        version = store.digest((dataset+fingerprint).encode())[:32]
         existing = store.one(con,"SELECT * FROM datasets WHERE id=:id",id=dataset)
         if existing and existing["owner"]!=owner:
             raise LookupError("Набор недоступен.")
         if store.one(con,"SELECT id FROM versions WHERE id=:v",v=version):
             return {"id":dataset,"version":version,"title":existing["title"],"repeated":True}
+    for code, total in Counter(choice["station"] for choice in selected).items():
+        if total > 1 and code not in combine_stations and not reserve_mapping(draft["raw_hash"], config, code):
+            raise ValueError(f"{code.upper()}: несколько таблиц с одним кодом. Подтвердите общую станцию или импортируйте таблицы отдельными наборами.")
     partitions = defaultdict(list)
     stats = Counter()
     available = defaultdict(set)

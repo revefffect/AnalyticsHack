@@ -6,7 +6,8 @@
   <meta name="theme-color" content="#143a30">
   <title>Красное · Метеонаблюдения</title>
   <link rel="stylesheet" href="/portal/static/portal.css">
-  <script src="/portal/static/portal.js" defer></script>
+  <link rel="stylesheet" href="/portal/static/station-atlas.css">
+  <script type="module" src="/portal/static/portal.js"></script>
 </head>
 <body>
   <a class="skip" href="#content">К содержанию</a>
@@ -34,6 +35,7 @@
       <header class="workspace-heading landscape"><div class="heading-copy"><p id="role" class="intro-location"></p><h1 id="page-title">Каталог наборов</h1></div><div class="isobars" aria-hidden="true"></div></header>
       <nav id="tabs" aria-label="Разделы кабинета">
         <button type="button" data-tab="catalog">Каталог</button>
+        <button type="button" data-tab="atlas">Атлас станций</button>
         <button type="button" data-tab="import" id="import-tab">Импорт</button>
         <button type="button" data-tab="report">Отчёт</button>
         <button type="button" data-tab="events">Уведомления</button>
@@ -43,6 +45,7 @@
         <div id="datasets" class="card-grid"></div>
         <h2 class="spaced">Внешние источники</h2><div id="external" class="card-grid"></div>
       </section>
+      <section id="atlas" class="view" hidden></section>
       <section id="import" class="view" hidden>
         <form id="upload-form" class="card upload">
           <h2>Загрузить наблюдения</h2>
@@ -55,6 +58,7 @@
           <div class="form-grid"><label>Название набора<input id="import-title" maxlength="150" required></label>
             <label>Название шаблона <small>(по желанию)</small><input id="template" maxlength="80"></label></div>
           <p id="preview-count" class="hint"></p><div id="file-mappings"></div>
+          <div id="station-groups"></div>
           <button class="primary" type="submit">Подтвердить и импортировать</button>
         </form>
       </section>
