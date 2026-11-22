@@ -1,0 +1,30 @@
+name: Validate weather data and calculations
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run calculation and input tests
+        run: python -m unittest discover -s tests -v
+      - name: Reconcile organizer coverage and April 2024 pressure
+        run: |
+          python tools/audit_meteo.py data/raw/meteo_hack_dataset.zip > "$RUNNER_TEMP/audit.json"
+          python - "$RUNNER_TEMP/audit.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          audit = json.loads(Path(sys.argv[1]).read_text())
+          assert not audit["reference_mismatches"], audit["reference_mismatches"]
+          assert audit["total_rows"] == 874560
+          pressure = audit["kr1_2024"]["pressure_hpa"]["april"]
+          assert (pressure["days"], pressure["longest_gap"], pressure["mean"]) == (2, 28, None)
+          PY
