@@ -163,7 +163,12 @@ async function loadWorkspace() {
   else if(params.has("dataset")) {openTab("report");await openReportLink(params);}
   else openTab(params.get("tab")==="atlas"?"atlas":"catalog");
 }
-onForm("login-form",async()=>{await api("/session",{method:"POST",body:{token:$("token").value}});$("token").value="";await loadWorkspace();});
+onForm("login-form",async()=>{
+  const session=await api("/session",{method:"POST",body:{token:$("token").value}});
+  $("token").value="";
+  if(session.role==="organizer") location.assign(session.location);
+  else await loadWorkspace();
+});
 $("logout").addEventListener("click",()=>busy($("logout"),async()=>{await api("/session",{method:"DELETE"});history.replaceState(null,"",location.pathname);signedOut();}));
 $("tabs").addEventListener("click",e=>{const b=e.target.closest("[data-tab]");if(b) openTab(b.dataset.tab);});
 

@@ -123,6 +123,52 @@ class Platform(unittest.TestCase):
                     self.assertEqual(preview.status_code,200)
                     self.assertEqual(preview.headers["content-type"],"image/png")
 
+    def test_organizer_code_opens_public_explorer(self):
+        for token in ["METEO", " meteo "]:
+            self.client.post("/portal/session",json={"token":"test-research"}).raise_for_status()
+            response=self.client.post("/portal/session",json={"token":token})
+            self.assertEqual(response.json(),{"role":"organizer","location":"/portal?demo=explore"})
+            self.assertIn("explorer.js",self.client.get(response.json()["location"]).text)
+            self.assertEqual(self.client.get("/portal/catalog").status_code,401)
+            self.assertEqual(self.client.post("/portal/imports/demo-preview").status_code,401)
+        self.assertEqual(self.client.get("/portal/me",headers={"Authorization":"Bearer METEO"}).status_code,401)
+        self.assertEqual(self.client.post("/portal/session",json={"token":"invalid"}).status_code,401)
+
+    def test_explorer_panels_match_archive_month_statistics(self):
+        archive=self.client.get("/portal/static/explorer-index.json").json()
+        self.assertEqual(archive["sha256"],store.digest((ROOT/"data/raw/meteo_hack_dataset.zip").read_bytes()))
+        sites=archive["sites"]
+        self.assertIn("soil_20",sites["ame60"]["fields"])
+        self.assertNotIn("soil_20",sites["kr1"]["fields"])
+        self.assertNotIn("pressure_hpa",sites["ame60"]["fields"])
+        self.assertEqual(sites["kr1"]["months"]["2024-04"]["pressure_hpa"],{"mean":None,"valid":2})
+        for code,site in sites.items():
+            years={month[:4] for month in site["months"]}
+            for year in years:
+                board=json.loads((ROOT/f"ops/guest-grafana/dashboards/explore-{code}-{year}.json").read_text("utf-8"))
+                self.assertEqual(board["uid"],f"meteo-{code}-{year}")
+                for i,(key,panel) in enumerate(zip(site["fields"],board["panels"],strict=True),1):
+                    self.assertEqual(panel["id"],i)
+                    times,*series=panel["targets"][0]["snapshot"][0]["data"]["values"]
+                    buckets={}
+                    for day,*values in zip(times,*series,strict=True):
+                        month=datetime.fromtimestamp(day/1000,timezone.utc).strftime("%Y-%m")
+                        buckets.setdefault(month,[]).append(values)
+                    for month,rows in buckets.items():
+                        if month not in site["months"]:
+                            self.assertTrue(all(v is None for r in rows for v in r))
+                            continue
+                        summary=site["months"][month][key]
+                        if key=="wind_dir":
+                            self.assertIsNone(summary["mean"])
+                            totals=[sum(n for n in sector if n is not None) for sector in zip(*rows,strict=True)]
+                            self.assertEqual(totals,summary["counts"])
+                        else:
+                            observed=[row[0] for row in rows if row[0] is not None]
+                            self.assertEqual(len(observed),summary["valid"])
+                            if summary["mean"] is not None:
+                                self.assertAlmostEqual(summary["mean"],sum(observed)/len(observed))
+
     def test_private_grants_saved_versions_export_and_chart(self):
         v=self.fixture();ds=v["id"];p={"station":"kr1","parameter":"t_air","month":"2024-04"}
         for route in ("report","export","profile"):

@@ -2,7 +2,7 @@
 import json
 import os
 import tempfile
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from statistics import mean
 from unittest.mock import patch
@@ -40,6 +40,62 @@ def dashboard(code, start, end, panels):
             "timezone": "utc", "refresh": "", "panels": panels}
 
 
+METRICS = {
+    "rh": ("Относительная влажность", "percent"),
+    "pressure_hpa": ("Атмосферное давление", "pressurehpa"),
+    "wind_speed": ("Скорость ветра", "velocityms"),
+    "wind_gust": ("Порывы ветра", "velocityms"),
+    "wind_dir": ("Направление ветра", "short"),
+    "t_air": ("Температура воздуха", "celsius"),
+    "soil_05": ("Температура почвы на глубине 5 см", "celsius"),
+    "soil_10": ("Температура почвы на глубине 10 см", "celsius"),
+    "soil_20": ("Температура почвы на глубине 20 см", "celsius"),
+}
+SECTORS = ("С", "СВ", "В", "ЮВ", "Ю", "ЮЗ", "З", "СЗ")
+
+
+def explorer_station(con, ds, version, manifest, code):
+    months = sorted(key.split("/")[1] for key in manifest["partitions"] if key.startswith(code + "/"))
+    fields = [key for key in METRICS if key in manifest["station_parameters"][code]]
+    site = {"name": atlas.NAMES[code], "fields": fields, "months": {}}
+    for year in sorted({month[:4] for month in months}):
+        start = date(int(year), 1, 1)
+        dates = [(start + timedelta(days=n)).isoformat() for n in range((date(int(year)+1, 1, 1)-start).days)]
+        series = {key: {} for key in fields}
+        for month in (m for m in months if m.startswith(year)):
+            summaries = site["months"][month] = {}
+            for key in fields:
+                result = reports.report(con, "demo", ds, code, key, month, "day", version, 0)
+                summary = result["summary"]
+                item = summaries[key] = {"mean": summary["value"], "valid": summary["valid"]}
+                if key != "wind_dir":
+                    series[key].update({row["period"]: row["value"] for row in result["rows"]})
+                    continue
+                daily = {}
+                for stamp, _, _, values, flags in reports.records(con, ds, version, manifest, code, month, 0):
+                    sector = reports.wind_sector(values, flags)
+                    if sector is not None:
+                        counts = daily.setdefault(stamp[:10], [0] * len(SECTORS))
+                        counts[sector // 45] += 1
+                series[key].update(daily)
+                item["counts"] = [sum(counts[i] for counts in daily.values()) for i in range(len(SECTORS))]
+        panels = []
+        for key in fields:
+            name, unit = METRICS[key]
+            values = series[key]
+            if key == "wind_dir":
+                lines = {sector: [values[d][i] if d in values else None for d in dates] for i, sector in enumerate(SECTORS)}
+                title = name + " · число измерений по секторам"
+            else:
+                lines = {name: [values.get(d) for d in dates]}
+                title = name + " · среднее за сутки"
+            panels.append(chart(title, dates, lines, unit))
+        board = dashboard(code, dates[0], dates[-1], panels)
+        board.update(uid=f"meteo-{code}-{year}", title=f"{atlas.NAMES[code]} · {year} · метеопоказатели")
+        write(DASHBOARDS / f"explore-{code}-{year}.json", board)
+    return site
+
+
 def build():
     archive = ROOT / "data/raw/meteo_hack_dataset.zip"
     raw = archive.read_bytes()
@@ -53,8 +109,10 @@ def build():
         row, version, manifest, _ = reports.visible(con, "demo", ds)
         sites = atlas.stations("demo", row, version, manifest, neighbors.features(manifest))
         results = {}
+        explorer = {}
         for site in sites:
             code = site["code"]
+            explorer[code] = explorer_station(con, ds, version, manifest, code)
             month = site["selection"]["month"]
             def report(period, parameter="t_air"):
                 return reports.report(con, "demo", ds, code, parameter, period, "day", version, 0)
@@ -95,6 +153,9 @@ def build():
             write(DASHBOARDS / (code+".json"), board)
             result["chart_panels"] = [{"id": panel["id"], "title": panel["title"]} for panel in board["panels"]]
             results[code] = result
+    write(ROOT/"weather/static/explorer-index.json", {"sha256": imports.RESERVE_SHA, "sites": explorer,
+          "metrics": {k: {"name": name, "unit": imports.UNITS[k]} for k, (name, _) in METRICS.items()},
+          "sectors": SECTORS})
     write(ROOT/"weather/static/organizer-archive.json", {"sha256": imports.RESERVE_SHA,
           "sites": sites+atlas.references(), "results": results})
 

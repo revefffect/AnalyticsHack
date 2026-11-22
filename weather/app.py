@@ -57,7 +57,10 @@ def page(request:Request):
             auth.actor(request)
         except HTTPException:
             public_page=True
-    return FileResponse(STATIC/("guest.html" if public_page else "index.html"),
+    template = "guest.html" if public_page else "index.html"
+    if query.get("demo") == "explore":
+        template = "explorer.html"
+    return FileResponse(STATIC/template,
                         headers={"Cache-Control":"private, no-store","Vary":"Cookie, Authorization"})
 
 
@@ -74,6 +77,10 @@ class Login(BaseModel):
 
 @app.post("/portal/session")
 def session(body:Login):
+    if body.token.strip().upper() == "METEO":
+        res=JSONResponse({"role":"organizer","location":"/portal?demo=explore"})
+        res.delete_cookie("weather_session",path="/")
+        return res
     for role in ("research","business"):
         key=auth.secret(role.upper()+"_TOKEN")
         if auth.equal(key,body.token):

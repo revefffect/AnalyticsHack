@@ -149,6 +149,13 @@ def evidence(con,actor,ds,station,parameter,date,version=None,revision=None):
     return {"date":date,"rows":rows,"version":v,"timezone":m["source"].get("timezone","unknown")}
 
 
+def wind_sector(values, flags):
+    angle = values.get("wind_dir")
+    if angle is None or "dup_conflict" in flags or any(f.startswith("wind_dir:") for f in flags):
+        return None
+    return int((angle + 22.5) % 360 // 45) * 45
+
+
 def profile(con,actor,ds,station,parameter,month,version=None):
     output=report(con,actor,ds,station,parameter,month,version=version)
     dataset,v,m,_=visible(con,actor,ds,version)
@@ -180,8 +187,10 @@ def profile(con,actor,ds,station,parameter,month,version=None):
             if flag=="dup_conflict" or flag.startswith(parameter+":"):
                 signals.append({**item,"rule":flag})
         usable = val is not None and "dup_conflict" not in flags and not any(flag.startswith(parameter+":") for flag in flags)
-        if usable and parameter=="wind_dir":
-            sectors[int((val+22.5)%360//45)*45]+=1
+        if parameter=="wind_dir":
+            sector=wind_sector(values,flags)
+            if sector is not None:
+                sectors[sector]+=1
         if prev:
             delta=(time-prev[0]).total_seconds()/60
             if delta>0:

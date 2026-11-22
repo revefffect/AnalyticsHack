@@ -7,7 +7,7 @@
   <title>Красное · Метеонаблюдения</title>
   <link rel="stylesheet" href="/portal/static/portal.css">
   <link rel="stylesheet" href="/portal/static/station-atlas.css">
-  <script type="module" src="/portal/static/portal.js"></script>
+  <script type="module" src="/portal/static/portal.js?v=organizers"></script>
 </head>
 <body>
   <a class="skip" href="#content">К содержанию</a>
@@ -27,7 +27,7 @@
       <form id="login-form" class="card login-form">
         <h2>Войти в кабинет</h2><label for="token">Ключ доступа</label>
         <input type="password" id="token" autocomplete="current-password" required>
-        <p class="hint">Используйте ключ, выданный для вашей роли.</p>
+        <p class="hint">Код для организаторов — <strong>METEO</strong>. Он открывает графики и статистику станций.</p>
         <button class="primary" type="submit">Открыть кабинет</button>
         <a href="/portal?demo=atlas">Посмотреть публичный атлас</a>
       </form>
