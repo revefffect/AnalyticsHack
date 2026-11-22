@@ -1,0 +1,317 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Красное · аналитический пульт</title>
+  <link rel="stylesheet" href="/static/fonts.css">
+  <link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <svg class="mark" viewBox="0 0 40 40" aria-hidden="true">
+          <path d="M4 31c7-3 9-11 16-11s9 8 16 11" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M7 24c5-2 7-8 13-8s8 6 13 8" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <path d="M12 15l8-9 8 9" fill="none" stroke="currentColor" stroke-width="1.4"/>
+          <circle cx="20" cy="27" r="2.6" fill="var(--accent)"/>
+        </svg>
+        <div class="brand-text">
+          <span class="wordmark">Красное</span>
+          <span class="scope">Центрально-Лесной заповедник</span>
+        </div>
+      </div>
+
+      <div class="workspace">
+        <label for="stationSelect">Станция</label>
+        <select id="stationSelect"></select>
+        <span id="stationMeta" class="meta"></span>
+      </div>
+
+      <nav class="nav" aria-label="Разделы">
+        <button class="nav-item active" data-view="overview">Обзор ряда</button>
+        <button class="nav-item" data-view="quality">Качество данных</button>
+        <button class="nav-item" data-view="risks">Риски и прогноз</button>
+        <button class="nav-item" data-view="annotations">Экспертная разметка</button>
+        <button class="nav-item" data-view="report">Отчёт для руководителя</button>
+      </nav>
+
+      <div class="provenance">
+        <span class="meta-label">Ряды не объединяются</span>
+        <div class="prov-row"><span>АМЕ-60</span><span>1992–2021</span></div>
+        <div class="prov-row"><span>Сокол М1</span><span>2022–2025</span></div>
+        <p>Смена прибора в 2021/2022. Тренд через границу не строится.</p>
+      </div>
+
+      <div class="sidebar-foot">
+        <div id="aiBadge" class="ai-badge">DeepSeek: локальный режим</div>
+        <button id="aiSettings" class="link-button" type="button">Настроить ключ</button>
+      </div>
+    </aside>
+
+    <main class="canvas">
+      <header class="title-row">
+        <div>
+          <h1 id="pageTitle">Обзор ряда</h1>
+          <p id="finding" class="finding">Загрузка архива…</p>
+        </div>
+        <div class="title-actions">
+          <button id="reportButton" class="primary" type="button">Скачать отчёт</button>
+        </div>
+      </header>
+
+      <section class="composer" aria-labelledby="composerLabel">
+        <label id="composerLabel" for="aiPrompt">Собрать дашборд словами</label>
+        <div class="composer-row">
+          <input id="aiPrompt" type="text" autocomplete="off" placeholder="Например: давление Кр1 в апреле 2024 и причины пропуска">
+          <button id="aiApply" class="secondary" type="button">Применить</button>
+        </div>
+        <div class="examples" id="examples">
+          <button class="chip" data-example="Покажи температуру Кр1 за 2024 по месяцам с аномалиями">Температура 2024</button>
+          <button class="chip" data-example="Давление Кр1 в апреле 2024 и причины пропуска">Почему пусто в апреле</button>
+          <button class="chip" data-example="Пожарная опасность на поляне летом 2025">Пожарный риск</button>
+          <button class="chip" data-example="Сравни влажность на Кр2 за последние 30 дней по дням">Влажность 30 дней</button>
+        </div>
+        <p id="aiNote" class="ai-note">Локальный разбор запроса. Ключ DeepSeek можно добавить в настройках.</p>
+      </section>
+
+      <section class="filters" aria-label="Фильтры ряда">
+        <div class="field">
+          <label for="paramSelect">Показатель</label>
+          <select id="paramSelect"></select>
+        </div>
+        <div class="field">
+          <label for="fromInput">С</label>
+          <input id="fromInput" type="date">
+        </div>
+        <div class="field">
+          <label for="toInput">По</label>
+          <input id="toInput" type="date">
+        </div>
+        <div class="field">
+          <label for="granSelect">Детализация</label>
+          <select id="granSelect">
+            <option value="day">День</option>
+            <option value="month" selected>Месяц</option>
+            <option value="year">Год</option>
+          </select>
+        </div>
+        <label class="switch field">
+          <input id="baselineToggle" type="checkbox" checked>
+          <span>Сравнивать со средним</span>
+        </label>
+        <button id="applyFilters" class="secondary" type="button">Обновить</button>
+      </section>
+
+      <div id="view-overview" class="view">
+        <section class="analytics-card">
+          <div class="analytics-head">
+            <div class="hero">
+              <span class="meta-label" id="heroLabel">Среднее за период</span>
+              <div class="hero-value num" id="heroValue">—</div>
+              <div class="delta num" id="heroDelta"></div>
+              <div class="meta" id="heroNote"></div>
+              <div class="legend" id="chartLegend"></div>
+            </div>
+            <div class="chart-wrap">
+              <div id="chart" class="chart" role="img" aria-label="Временной ряд выбранного показателя"></div>
+              <div class="chart-hint" id="chartHint">Клик по точке — поставить экспертную отметку.</div>
+            </div>
+          </div>
+          <div class="kpi-strip" id="kpiStrip"></div>
+        </section>
+
+        <section class="two-col">
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Что важно</h2>
+              <span class="meta" id="insightCount"></span>
+            </div>
+            <div id="insights" class="insight-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head">
+              <h2>Экспертная разметка</h2>
+              <button class="link-button" type="button" data-view-jump="annotations">Все отметки</button>
+            </div>
+            <div id="overviewAnnotations" class="annotation-list compact"></div>
+            <p class="panel-note">Отметка эксперта не меняет расчёт. Она видна коллеге в списке и попадает в PDF с именем автора.</p>
+            <button class="secondary annotation-add" type="button" data-view-jump="annotations">Добавить отметку</button>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Месячная таблица</h2>
+            <span class="meta">Пустая ячейка — пропуск, не ноль</span>
+          </div>
+          <div id="monthlyTable" class="table-wrap"></div>
+        </section>
+      </div>
+
+      <div id="view-quality" class="view" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Покрытие по месяцам</h2>
+            <span class="meta" id="coverageNote"></span>
+          </div>
+          <div id="coverageHeatmap" class="heatmap"></div>
+          <div class="heat-legend"><span>0 %</span><i></i><span>100 %</span><span class="meta">цвет — доля валидных дней</span></div>
+        </section>
+
+        <section class="two-col">
+          <div class="panel">
+            <div class="panel-head"><h2>Почему месяц исключён</h2></div>
+            <div id="exclusionReasons" class="reason-list"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>Флаги качества</h2></div>
+            <div id="flagTable" class="table-wrap"></div>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Оценка пропуска</h2>
+            <span class="meta">оценка не заменяет наблюдение</span>
+          </div>
+          <p class="panel-note">Выберите дату. Сервер покажет климатологию того же дня, соседнюю точку того же прибора и внешний реанализ — с подписью источника и погрешностью. В отчёт оценка не подставляется автоматически.</p>
+          <div class="gap-form">
+            <div class="field"><label for="gapDate">Дата</label><input id="gapDate" type="date"></div>
+            <button id="gapEstimate" class="secondary" type="button">Оценить</button>
+            <span id="gapStatus" class="meta"></span>
+          </div>
+          <div id="gapResult" class="gap-result"></div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Автоматический EDA</h2>
+            <span class="meta">распределение, корреляции, аномалии</span>
+          </div>
+          <div id="edaContent" class="eda-grid"></div>
+        </section>
+      </div>
+
+      <div id="view-risks" class="view" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Риски сезона</h2>
+            <span class="meta" id="riskMeta"></span>
+          </div>
+          <p class="panel-note" id="riskNote">Оценки — процентиль года среди лет архива. Это управленческий прокси, не официальный класс опасности.</p>
+          <div id="riskCards" class="risk-grid"></div>
+        </section>
+
+        <section class="two-col">
+          <div class="panel">
+            <div class="panel-head"><h2>Статистический прогноз</h2><span class="meta" id="forecastMethod"></span></div>
+            <div id="forecastChart" class="chart small"></div>
+            <div id="forecastTable" class="table-wrap"></div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>Внешний прогноз</h2><span class="meta">Open-Meteo · модель</span></div>
+            <div id="externalForecast" class="table-wrap"></div>
+            <p class="panel-note" id="externalNote"></p>
+          </div>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Автовыбор модели</h2><span class="meta">бэктест по MAE</span></div>
+          <div id="automlTable" class="table-wrap"></div>
+        </section>
+      </div>
+
+      <div id="view-annotations" class="view" hidden>
+        <section class="panel">
+          <div class="panel-head">
+            <h2>Новая экспертная отметка</h2>
+            <span class="meta" id="annotationStats"></span>
+          </div>
+          <form id="annotationForm" class="form-grid">
+            <div class="field"><label for="annStation">Станция</label><select id="annStation"></select></div>
+            <div class="field"><label for="annParameter">Показатель</label><select id="annParameter"></select></div>
+            <div class="field"><label for="annStart">С</label><input id="annStart" type="date" required></div>
+            <div class="field"><label for="annEnd">По</label><input id="annEnd" type="date"></div>
+            <div class="field"><label for="annKind">Тип</label><select id="annKind"></select></div>
+            <div class="field"><label for="annSeverity">Важность</label><select id="annSeverity"></select></div>
+            <div class="field wide"><label for="annTitle">Заголовок</label><input id="annTitle" type="text" maxlength="200" required placeholder="Что должен увидеть коллега"></div>
+            <div class="field wide"><label for="annNote">Пояснение</label><textarea id="annNote" rows="3" placeholder="Причина, проверка или решение"></textarea></div>
+            <div class="field"><label for="annAuthor">Автор</label><input id="annAuthor" type="text" placeholder="Эксперт-метеоролог"></div>
+            <div class="field align-end"><button class="primary" type="submit">Добавить отметку</button></div>
+          </form>
+          <p class="panel-note">Разметка не меняет расчёт. Она попадает в график и PDF-отчёт с именем автора.</p>
+        </section>
+
+        <section class="panel">
+          <div class="panel-head"><h2>Все отметки</h2><span class="meta" id="annotationCount"></span></div>
+          <div id="annotationList" class="annotation-list"></div>
+        </section>
+      </div>
+
+      <div id="view-report" class="view" hidden>
+        <section class="report-grid">
+          <div class="panel report-main">
+            <div class="panel-head"><h2>Отчёт для управленческого решения</h2><span class="meta" id="reportMeta"></span></div>
+            <div id="reportNarrative" class="narrative">Соберите отчёт: текст для руководителя рассчитывается по данным и экспертной разметке.</div>
+            <div class="report-actions">
+              <button id="buildReport" class="primary" type="button">Собрать PDF</button>
+              <button id="refreshNarrative" class="secondary" type="button">Обновить текст</button>
+              <span id="reportStatus" class="meta"></span>
+            </div>
+          </div>
+          <div class="panel">
+            <div class="panel-head"><h2>Что войдёт</h2></div>
+            <ul class="report-list" id="reportContents"></ul>
+          </div>
+        </section>
+        <section class="panel">
+          <div class="panel-head"><h2>Действия</h2><span class="meta">по текущим рискам и качеству</span></div>
+          <div id="reportActions" class="action-list"></div>
+        </section>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="annotationDialog" class="dialog">
+    <form method="dialog" id="quickAnnotationForm">
+      <div class="dialog-head">
+        <h2>Экспертная отметка</h2>
+        <button class="link-button" value="cancel" type="submit">Закрыть</button>
+      </div>
+      <p class="meta" id="quickAnnotationMeta"></p>
+      <div class="field"><label for="quickTitle">Заголовок</label><input id="quickTitle" type="text" required maxlength="200"></div>
+      <div class="field"><label for="quickKind">Тип</label><select id="quickKind"></select></div>
+      <div class="field"><label for="quickSeverity">Важность</label><select id="quickSeverity"></select></div>
+      <div class="field"><label for="quickNote">Пояснение</label><textarea id="quickNote" rows="3"></textarea></div>
+      <div class="field"><label for="quickAuthor">Автор</label><input id="quickAuthor" type="text" placeholder="Эксперт"></div>
+      <div class="dialog-actions">
+        <button class="secondary" value="cancel" type="submit">Отмена</button>
+        <button class="primary" value="default" type="submit" id="quickSave">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="aiDialog" class="dialog">
+    <form method="dialog" id="aiForm">
+      <div class="dialog-head">
+        <h2>Подключить DeepSeek</h2>
+        <button class="link-button" value="cancel" type="submit">Закрыть</button>
+      </div>
+      <p class="meta">Ключ хранится в памяти процесса и не пишется на диск. Без ключа работает локальный разбор запросов.</p>
+      <div class="field"><label for="aiKey">API key</label><input id="aiKey" type="password" autocomplete="off" placeholder="sk-…"></div>
+      <div class="field"><label for="aiBase">Base URL</label><input id="aiBase" type="text" placeholder="https://api.deepseek.com"></div>
+      <div class="field"><label for="aiModel">Модель</label><input id="aiModel" type="text" placeholder="deepseek-chat"></div>
+      <div class="dialog-actions">
+        <button class="secondary" value="cancel" type="submit">Отмена</button>
+        <button class="primary" value="default" type="submit" id="aiSave">Сохранить</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div id="tooltip" class="tooltip" hidden></div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
