@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#143a30">
+  <title>Атлас наблюдений · Урочище Красное</title>
+  <link rel="stylesheet" href="/portal/static/portal.css">
+  <link rel="stylesheet" href="/portal/static/station-atlas.css">
+  <link rel="stylesheet" href="/portal/static/guest.css">
+  <script type="module" src="/portal/static/guest.js"></script>
+</head>
+<body>
+  <a class="skip" href="#content">К содержанию</a>
+  <header class="mast"><div class="mast-inner">
+    <a class="brand guest-brand" href="/portal"><i class="brand-mark" aria-hidden="true"></i><span>Красное<small>Метеонаблюдения</small></span></a>
+    <a class="action-link" href="/portal?login=1">Войти в кабинет</a>
+  </div></header>
+  <main class="shell" id="content">
+    <header class="workspace-heading landscape">
+      <p class="intro-location">Центрально-Лесной заповедник · урочище Красное</p>
+      <h1 id="title">Атлас метеонаблюдений</h1>
+      <p id="finding" class="guest-finding" aria-live="polite"></p>
+      <div id="links" class="actions"></div><div class="isobars" aria-hidden="true"></div>
+    </header>
+    <div id="atlas" class="guest-section"></div>
+    <section id="report" class="card guest-section" hidden></section>
+    <p role="alert" id="error"></p>
+  </main>
+</body></html>

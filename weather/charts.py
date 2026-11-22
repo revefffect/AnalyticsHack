@@ -90,6 +90,12 @@ def synchronize():
 
 async def proxy(request: Request, role, path):
     from .auth import actor
+    if role=="demo":
+        if request.method not in ("GET","HEAD"):
+            raise HTTPException(405,"Публичные графики доступны для просмотра.")
+        if any(part in (".","..") or "\\" in part for part in path.split("/")):
+            raise HTTPException(404)
+        return await forward(request,role,path)
     actual=actor(request)
     if actual!=role or role not in ROLES:
         raise HTTPException(403,"Кабинет Grafana недоступен.")
@@ -98,6 +104,10 @@ async def proxy(request: Request, role, path):
         from .reports import visible
         with store.db().connect() as con:
             visible(con,role,match.group(1),request.query_params.get("var-version"))
+    return await forward(request,role,path)
+
+
+async def forward(request,role,path):
     base=endpoint(role)
     if not base:
         raise HTTPException(503,"Сервер Grafana этого кабинета ещё не настроен.")

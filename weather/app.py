@@ -48,8 +48,17 @@ async def invalid(request,exc):
 
 @app.get("/",include_in_schema=False)
 @app.get("/portal",include_in_schema=False)
-def page():
-    return FileResponse(STATIC/"index.html")
+def page(request:Request):
+    query=request.query_params
+    private_link=any(k in query for k in ("login","dataset","saved"))
+    public_page="demo" in query
+    if not public_page and not private_link:
+        try:
+            auth.actor(request)
+        except HTTPException:
+            public_page=True
+    return FileResponse(STATIC/("guest.html" if public_page else "index.html"),
+                        headers={"Cache-Control":"private, no-store","Vary":"Cookie, Authorization"})
 
 
 @app.get("/health")

@@ -79,6 +79,39 @@ class Platform(unittest.TestCase):
         self.assertNotIn("t_air",ambiguous["files"][0]["mapping"])
         self.assertIsNone(ambiguous["files"][0]["station"])
 
+    def test_guest_opens_archive_without_granting_workspace_access(self):
+        private=self.fixture()
+        for url in ("/","/portal?tab=atlas","/portal?demo=report&station=kr2"):
+            landing=self.client.get(url)
+            self.assertIn("/portal/static/guest.js",landing.text)
+            self.assertIn("no-store",landing.headers["cache-control"])
+        for url in ("/portal?login=1",f"/portal?dataset={private['id']}"):
+            self.assertIn("/portal/static/portal.js",self.client.get(url).text)
+        self.assertIn("/portal/static/portal.js",self.client.get("/portal",headers=self.owner).text)
+        for path in ("/portal/me","/portal/catalog","/portal/events","/charts/business/api/search","/charts/research/api/search"):
+            self.assertEqual(self.client.get(path).status_code,401)
+        params={"station":"kr1","parameter":"t_air","month":"2024-04"}
+        self.assertEqual(self.client.get(f"/portal/datasets/{private['id']}/report",params=params).status_code,401)
+        self.assertEqual(self.client.post("/portal/imports/demo-preview").status_code,401)
+        self.assertEqual(self.client.post("/charts/demo/api/dashboards/db",json={}).status_code,405)
+        self.assertEqual(self.client.get("/portal/chart-data/"+private["id"],params=params).status_code,401)
+        public=self.client.get("/portal/static/organizer-archive.json")
+        self.assertNotIn(private["id"],public.text)
+        data=public.json()
+        self.assertEqual(data["sha256"],store.digest((ROOT/"data/raw/meteo_hack_dataset.zip").read_bytes()))
+        self.assertEqual(sum(s.get("records",0) for s in data["sites"]),874560)
+        self.assertEqual(data["results"]["kr1"]["pressure_days"],2)
+        self.assertAlmostEqual(data["results"]["ame60"]["mean"],-15.20,places=2)
+        kr2=data["results"]["kr2"]
+        self.assertEqual(len(kr2["estimates"]),4)
+        board=json.loads((ROOT/"ops/guest-grafana/dashboards/kr2.json").read_text(encoding="utf-8"))
+        target=board["panels"][0]["targets"][0]
+        self.assertEqual(target["queryType"],"snapshot")
+        dates,observed,estimated=target["snapshot"][0]["data"]["values"]
+        series={datetime.fromtimestamp(t/1000,timezone.utc).date().isoformat():(o,e) for t,o,e in zip(dates,observed,estimated,strict=True)}
+        self.assertEqual({d:v for d,(_,v) in series.items() if v is not None},{p["date"]:p["estimate"] for p in kr2["estimates"]})
+        self.assertTrue(all(series[p["date"]][0] is None for p in kr2["estimates"]))
+
     def test_private_grants_saved_versions_export_and_chart(self):
         v=self.fixture();ds=v["id"];p={"station":"kr1","parameter":"t_air","month":"2024-04"}
         for route in ("report","export","profile"):
