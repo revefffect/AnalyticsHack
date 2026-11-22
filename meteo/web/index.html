@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#112b2a">
+  <title>Метеоархив · AnalyticsHack</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script type="module" src="/assets/app.js"></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-icon" aria-hidden="true">◉</span><span>Метеоархив<small>AnalyticsHack</small></span></a>
+    <nav id="nav" aria-label="Кабинет" hidden>
+      <button data-page="analysis">Наблюдения</button>
+      <button data-page="import" data-research>Импорт данных</button>
+      <button data-page="catalog">Каталог</button>
+      <button data-page="satellite">Спутник</button>
+      <button data-page="reports">Отчёты</button>
+      <button data-page="alerts">Уведомления</button>
+    </nav>
+    <div class="identity" id="identity" hidden><span id="role"></span><button id="logout">Выйти</button></div>
+  </aside>
+  <main id="main">
+    <section id="login" class="login" hidden>
+      <p class="eyebrow">Центрально-Лесной заповедник</p>
+      <h1>Метеоархив</h1>
+      <p>Наблюдения, проверка качества и отчёты по урочищу Красное.</p>
+      <form id="login-form">
+        <label>Ключ кабинета<input name="token" type="password" required autocomplete="current-password"></label>
+        <button class="primary">Войти</button>
+      </form>
+      <div id="demo-logins" class="actions" hidden>
+        <button data-token="research-demo">Кабинет исследователя</button>
+        <button data-token="business-demo">Кабинет бизнеса</button>
+      </div>
+    </section>
+    <section id="workspace" hidden>
+      <header class="page-head">
+        <div><p class="eyebrow" id="eyebrow"></p><h1 id="heading"></h1></div>
+        <div class="actions" id="header-actions"></div>
+      </header>
+      <p id="notice" role="status" hidden></p>
+      <div id="content"></div>
+    </section>
+    <p id="login-error" role="alert" hidden></p>
+  </main>
+</body>
+</html>

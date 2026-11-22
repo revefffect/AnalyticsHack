@@ -1,0 +1,45 @@
+services:
+  app:
+    build: .
+    ports:
+      - "${METEO_BIND:-127.0.0.1}:8000:8000"
+    environment:
+      METEO_DEMO: "${METEO_DEMO:-1}"
+      METEO_ACCOUNTS: "${METEO_ACCOUNTS:-}"
+      METEO_FEED_TOKEN: "${METEO_FEED_TOKEN:-}"
+      METEO_FEED_OWNER: "${METEO_FEED_OWNER:-research}"
+      METEO_GRAFANA_READ_TOKEN: "${METEO_GRAFANA_READ_TOKEN:-local-demo-read}"
+      METEO_GRAFANA_OWNER: "${METEO_GRAFANA_OWNER:-research}"
+      METEO_GRAFANA_INTERNAL: http://grafana:3000
+      METEO_GRAFANA_PUBLIC: "${METEO_GRAFANA_PUBLIC:-http://localhost:3000}"
+      METEO_GRAFANA_APP_PUBLIC: "${METEO_GRAFANA_APP_PUBLIC:-http://localhost:8000}"
+      METEO_GRAFANA_WRITE_USER: "${GRAFANA_USER:-admin}"
+      METEO_GRAFANA_WRITE_PASSWORD: "${GRAFANA_PASSWORD:-local-demo-grafana}"
+      METEO_WEBHOOK_URL: "${METEO_WEBHOOK_URL:-}"
+      OPEN_METEO_API_KEY: "${OPEN_METEO_API_KEY:-}"
+      OPEN_METEO_COMMERCIAL: "${OPEN_METEO_COMMERCIAL:-0}"
+    volumes:
+      - platform:/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "from urllib.request import urlopen; urlopen('http://localhost:8000/health', timeout=2)"]
+      interval: 8s
+      timeout: 3s
+      retries: 10
+      start_period: 45s
+  grafana:
+    profiles: ["grafana"]
+    image: grafana/grafana:12.4.0
+    ports:
+      - "${METEO_BIND:-127.0.0.1}:3000:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GRAFANA_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_PASSWORD:-local-demo-grafana}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_PLUGINS_PREINSTALL_SYNC: yesoreyeram-infinity-datasource
+      METEO_GRAFANA_READ_TOKEN: "${METEO_GRAFANA_READ_TOKEN:-local-demo-read}"
+    volumes:
+      - grafana:/var/lib/grafana
+      - ./ops/grafana:/etc/grafana/provisioning/datasources:ro
+volumes:
+  platform:
+  grafana:

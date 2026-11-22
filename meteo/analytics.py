@@ -10,7 +10,7 @@ from meteo.importer import PARAMETERS, QC_VERSION, SCHEMA_VERSION
 from tools.audit_meteo import valid_month
 
 DAY = timedelta(days=1)
-PERIODS = {'day': 'Сутки', 'decade': 'Декады', 'month': 'Месяцы'}
+PERIODS = {'day': 'Сутки', 'decade': 'Декады', 'month': 'Месяцы', 'instant': 'Измерения потока'}
 QC_REASONS = {
     'dup_conflict': 'Противоречащие записи одного срока',
     'dup_exact': 'Повтор идентичной записи',
@@ -206,13 +206,29 @@ def period_rows(start, end, step, metric, daily):
         }
 
 
+def instant_points(db, dataset, station, start, end, metric, daily):
+    for index, row in enumerate(observations(db, dataset['id'], station, start, end, metric)):
+        if index >= 15000:
+            raise ValueError('Сократите период для показа измерений потока')
+        state, flags = observation_status(row, metric)
+        day = daily[date.fromisoformat(row['stamp'][:10])]
+        yield {'start': row['stamp'], 'end': row['stamp'], 'value': row['value'] if state == 'usable' else None,
+               'received_at': row['received_at'], 'original_stamp': row['original_stamp'], 'zone': row['zone'],
+               'valid_days': int(day['eligible']), 'expected_days': 1, 'partial': False, 'longest_gap': 0,
+               'counts': {state: 1}, 'flags': dict(Counter(flags)), 'reason': flags[0] if flags else None}
+
+
 def slice_data(db, dataset, station, metric, start, end, step, baseline_month=None):
     if metric not in PARAMETERS or step not in PERIODS or end < start or start.year < 1800 or end.year > 2200:
         raise ValueError('Проверьте параметр, шаг и выбранный период')
+    if step == 'instant' and dataset['source'] not in {'stream', 'stream_snapshot'}:
+        raise ValueError('Показ по отдельным измерениям доступен для потока')
     if baseline_month is not None and not 1 <= baseline_month <= 12:
         raise ValueError('Укажите месяц от 1 до 12')
     daily, diagnostics = daily_series(db, dataset['id'], station, start, end, metric, dataset['source'])
-    points = list(period_rows(start, end, step, metric, daily))
+    points = list(instant_points(db, dataset, station, start, end, metric, daily)) if step == 'instant' else list(
+        period_rows(start, end, step, metric, daily)
+    )
     months = list(period_rows(start, end, 'month', metric, daily)) if step != 'month' else points
     season = {}
     for month in range(1, 13):
@@ -232,7 +248,8 @@ def slice_data(db, dataset, station, metric, start, end, step, baseline_month=No
         'dataset': dataset['id'], 'name': dataset['name'], 'source': dataset['source'],
         'schema': SCHEMA_VERSION, 'qc': QC_VERSION, 'station': station, 'parameter': metric,
         'unit': PARAMETERS[metric][1], 'start': str(start), 'end': str(end), 'step': step,
-        'method': 'Сутки по пригодным наблюдениям, месяцы по пригодным суткам, каждому году равный вес',
+        'method': ('Отдельные пригодные измерения потока' if step == 'instant' else
+                   'Сутки по пригодным наблюдениям, месяцы по пригодным суткам, каждому году равный вес'),
         'coverage': {'valid_days': sum(row['eligible'] for row in daily.values()), 'days': len(daily),
                      'valid_periods': len(available), 'periods': len(points)},
         'points': points,
@@ -269,7 +286,9 @@ def describe_dataset(db, dataset):
         FROM observations WHERE dataset=? GROUP BY station ORDER BY station
     """, (dataset['id'],))
     metadata = json.loads(dataset['metadata'])
-    params = {field for mapping, _, _ in metadata.get('mapping', {}).values() for field in mapping}
+    params = set(metadata.get('parameters', [])) | {
+        field for mapping, _, _ in metadata.get('mapping', {}).values() for field in mapping
+    }
     stations = [dict(row) for row in rows]
     return {**{key: dataset[key] for key in ('id', 'name', 'owner', 'source', 'created_at', 'visibility', 'row_count')},
             'stations': stations, 'parameters': sorted(params & PARAMETERS.keys()), 'metadata': metadata}

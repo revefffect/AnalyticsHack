@@ -68,7 +68,7 @@ def csv_rows(raw):
     raw.seek(0)
     encoding = encoding_of(sample)
     first = sample.splitlines()[0].decode(encoding) if sample else ''
-    delimiter = max((',', ';', '\t'), key=first.count)
+    delimiter = max((',', ';', '\t'), key=lambda sep: len(next(csv.reader([first], delimiter=sep))))
     with TextIOWrapper(raw, encoding=encoding, newline='') as inp:
         reader = csv.DictReader(inp, delimiter=delimiter)
         headers = check_headers(reader.fieldnames or [])
@@ -155,6 +155,27 @@ def station_from_name(filename):
     return match[1].upper() if match else None
 
 
+def guess_type(value):
+    if isinstance(value, (datetime, date)):
+        return 'datetime'
+    if isinstance(value, bool):
+        return 'boolean'
+    if isinstance(value, (int, float)):
+        return 'number'
+    if not isinstance(value, str):
+        return type(value).__name__
+    try:
+        float(value.replace(',', '.'))
+        return 'number'
+    except ValueError:
+        pass
+    try:
+        datetime.fromisoformat(value)
+        return 'datetime'
+    except ValueError:
+        return 'text'
+
+
 def preview(path, filename):
     result = []
     try:
@@ -165,7 +186,7 @@ def preview(path, filename):
             result.append({
                 'name': name, 'columns': headers, 'mapping': mapping, 'ambiguous': ambiguous,
                 'station': station_from_name(name), 'sample': [row for _, row in sample],
-                'types': {key: sorted({type(row.get(key)).__name__ for _, row in sample
+                'types': {key: sorted({guess_type(row[key]) for _, row in sample
                                        if row.get(key) not in (None, '')}) for key in headers},
                 'units': {field: PARAMETERS[field][1] for field in mapping if field in PARAMETERS},
                 'conversions': ['Числа: десятичная запятая или точка', 'Дата и время: исходное локальное время'],

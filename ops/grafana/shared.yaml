@@ -1,0 +1,13 @@
+apiVersion: 1
+datasources:
+  - name: Наборы общего кабинета
+    type: yesoreyeram-infinity-datasource
+    uid: meteo-shared
+    access: proxy
+    editable: false
+    jsonData:
+      allowedHosts:
+        - http://app:8000
+      httpHeaderName1: Authorization
+    secureJsonData:
+      httpHeaderValue1: 'Bearer $METEO_GRAFANA_READ_TOKEN'
