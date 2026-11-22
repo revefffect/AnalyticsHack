@@ -7,8 +7,8 @@
   <title>Атлас наблюдений · Урочище Красное</title>
   <link rel="stylesheet" href="/portal/static/portal.css">
   <link rel="stylesheet" href="/portal/static/station-atlas.css">
-  <link rel="stylesheet" href="/portal/static/guest.css">
-  <script type="module" src="/portal/static/guest.js"></script>
+  <link rel="stylesheet" href="/portal/static/guest.css?v=2">
+  <script type="module" src="/portal/static/guest.js?v=2"></script>
 </head>
 <body>
   <a class="skip" href="#content">К содержанию</a>
@@ -20,9 +20,21 @@
     <header class="workspace-heading landscape">
       <p class="intro-location">Центрально-Лесной заповедник · урочище Красное</p>
       <h1 id="title">Атлас метеонаблюдений</h1>
-      <p id="finding" class="guest-finding" aria-live="polite"></p>
-      <div id="links" class="actions"></div><div class="isobars" aria-hidden="true"></div>
+      <div class="isobars" aria-hidden="true"></div>
     </header>
+    <section id="statistics" class="guest-section" aria-labelledby="stats-title" hidden>
+      <div class="stats-heading">
+        <h2 id="stats-title"></h2>
+        <div id="stats-stations" aria-label="Станции с наблюдениями"></div>
+      </div>
+      <dl id="stats-values"></dl>
+      <div id="stats-controls" role="group" aria-label="Показатель на графике"></div>
+      <div id="stats-plot"></div>
+    </section>
+    <div class="guest-summary">
+      <p id="finding" class="guest-finding" aria-live="polite"></p>
+      <div id="links" class="actions"></div>
+    </div>
     <div id="atlas" class="guest-section"></div>
     <section id="report" class="card guest-section" hidden></section>
     <p role="alert" id="error"></p>

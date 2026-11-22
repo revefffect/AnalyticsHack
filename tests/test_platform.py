@@ -111,6 +111,17 @@ class Platform(unittest.TestCase):
         series={datetime.fromtimestamp(t/1000,timezone.utc).date().isoformat():(o,e) for t,o,e in zip(dates,observed,estimated,strict=True)}
         self.assertEqual({d:v for d,(_,v) in series.items() if v is not None},{p["date"]:p["estimate"] for p in kr2["estimates"]})
         self.assertTrue(all(series[p["date"]][0] is None for p in kr2["estimates"]))
+        observed_values=[o for o,_ in series.values() if o is not None]
+        self.assertEqual(kr2["year_temperature"],{"days":len(series),"valid_days":len(observed_values),
+                                                  "min":min(observed_values),"max":max(observed_values)})
+        for code,result in data["results"].items():
+            board=json.loads((ROOT/f"ops/guest-grafana/dashboards/{code}.json").read_text(encoding="utf-8"))
+            self.assertEqual(result["chart_panels"],[{k:p[k] for k in ("id","title")} for p in board["panels"]])
+            for panel in result["chart_panels"]:
+                for size in ("wide","narrow"):
+                    preview=self.client.get(f"/portal/static/panel-previews/{code}-{panel['id']}-{size}.png")
+                    self.assertEqual(preview.status_code,200)
+                    self.assertEqual(preview.headers["content-type"],"image/png")
 
     def test_private_grants_saved_versions_export_and_chart(self):
         v=self.fixture();ds=v["id"];p={"station":"kr1","parameter":"t_air","month":"2024-04"}

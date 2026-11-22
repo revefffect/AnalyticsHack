@@ -81,6 +81,9 @@ def build():
                 result["estimates"] = neighbors.layer(con, "demo", ds, code, "t_air", date(2025,1,1), date(2025,12,31), version, 0)["points"]
                 estimates = {p["date"]: p["estimate"] for p in result["estimates"]}
                 year_rows = [r for m in range(1,13) for r in report(f"2025-{m:02}")["rows"]]
+                observed = [r["value"] for r in year_rows if r["value"] is not None]
+                result["year_temperature"] = {"valid_days":len(observed), "days":len(year_rows),
+                                              "min":min(observed), "max":max(observed)}
                 dates = [r["period"] for r in year_rows]
                 panels = [chart("Кр2 · наблюдения и оценки пропусков", dates,
                                 {"Измерено": [r["value"] for r in year_rows], "Оценка по Кр1": [estimates.get(day) for day in dates]}, "celsius")]
@@ -88,7 +91,9 @@ def build():
                     {"id":"custom.lineWidth","value":0},{"id":"custom.pointSize","value":9},
                     {"id":"color","value":{"mode":"fixed","fixedColor":"orange"}}]}]
                 panels.append(chart("Полнота наблюдений по дням", dates, {"Пригодных часов": [r["valid"] for r in year_rows]}, "short"))
-            write(DASHBOARDS / (code+".json"), dashboard(code, dates[0], dates[-1], panels))
+            board = dashboard(code, dates[0], dates[-1], panels)
+            write(DASHBOARDS / (code+".json"), board)
+            result["chart_panels"] = [{"id": panel["id"], "title": panel["title"]} for panel in board["panels"]]
             results[code] = result
     write(ROOT/"weather/static/organizer-archive.json", {"sha256": imports.RESERVE_SHA,
           "sites": sites+atlas.references(), "results": results})
