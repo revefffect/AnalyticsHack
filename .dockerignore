@@ -1,0 +1,6 @@
+.git
+.env
+.runtime
+.venv
+deliverables
+**/__pycache__

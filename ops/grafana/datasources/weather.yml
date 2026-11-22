@@ -1,0 +1,15 @@
+apiVersion: 1
+datasources:
+  - name: Доступные наблюдения
+    uid: weather-rows
+    type: yesoreyeram-infinity-datasource
+    access: proxy
+    url: $WEATHER_API_ORIGIN
+    editable: false
+    isDefault: true
+    jsonData:
+      httpHeaderName1: X-Weather-Key
+      allowedHosts:
+        - ${WEATHER_API_ORIGIN}/portal/chart-data/
+    secureJsonData:
+      httpHeaderValue1: $WEATHER_CHART_KEY

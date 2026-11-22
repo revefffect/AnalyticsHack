@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY);
+INSERT INTO schema_version(version) VALUES(1) ON CONFLICT DO NOTHING;
+CREATE TABLE IF NOT EXISTS previews (id TEXT PRIMARY KEY, owner TEXT NOT NULL, raw_hash TEXT NOT NULL, filename TEXT NOT NULL, metadata TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS templates (owner TEXT NOT NULL, name TEXT NOT NULL, mappings TEXT NOT NULL, PRIMARY KEY(owner,name));
+CREATE TABLE IF NOT EXISTS datasets (id TEXT PRIMARY KEY, owner TEXT NOT NULL, title TEXT NOT NULL, version TEXT NOT NULL, public INTEGER NOT NULL DEFAULT 0, revision INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS versions (id TEXT PRIMARY KEY, dataset TEXT NOT NULL REFERENCES datasets(id), fingerprint TEXT NOT NULL, created TEXT NOT NULL, manifest TEXT NOT NULL, UNIQUE(dataset,fingerprint));
+CREATE TABLE IF NOT EXISTS connections (dataset TEXT NOT NULL REFERENCES datasets(id), actor TEXT NOT NULL, version TEXT NOT NULL REFERENCES versions(id), PRIMARY KEY(dataset,actor,version));
+CREATE TABLE IF NOT EXISTS saved (id TEXT PRIMARY KEY, actor TEXT NOT NULL, dataset TEXT NOT NULL REFERENCES datasets(id), snapshot TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS rules (id TEXT PRIMARY KEY, dataset TEXT NOT NULL REFERENCES datasets(id), station TEXT NOT NULL, parameter TEXT NOT NULL, config TEXT NOT NULL, created TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS messages (dataset TEXT NOT NULL REFERENCES datasets(id), id TEXT NOT NULL, version TEXT NOT NULL, revision INTEGER NOT NULL, station TEXT NOT NULL, stamp TEXT NOT NULL, received TEXT NOT NULL, mode TEXT NOT NULL, payload TEXT NOT NULL, PRIMARY KEY(dataset,id), UNIQUE(dataset,revision));
+CREATE INDEX IF NOT EXISTS messages_time ON messages(dataset,version,station,stamp);
+CREATE TABLE IF NOT EXISTS events (id TEXT PRIMARY KEY, dataset TEXT NOT NULL REFERENCES datasets(id), version TEXT NOT NULL, rule TEXT NOT NULL REFERENCES rules(id), created TEXT NOT NULL, detail TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS outbox (id TEXT PRIMARY KEY REFERENCES events(id), delivered TEXT, attempts INTEGER NOT NULL DEFAULT 0, retry_at TEXT NOT NULL, lease TEXT);
+CREATE TABLE IF NOT EXISTS chart_sync (dataset TEXT PRIMARY KEY REFERENCES datasets(id), due INTEGER NOT NULL DEFAULT 1);

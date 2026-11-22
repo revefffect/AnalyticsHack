@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#143a30">
+  <title>Красное · Метеонаблюдения</title>
+  <link rel="stylesheet" href="/portal/static/portal.css">
+  <script src="/portal/static/portal.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#content">К содержанию</a>
+  <header class="mast">
+    <div class="mast-inner">
+      <div class="brand"><i class="brand-mark" aria-hidden="true"></i><span>Красное<small>Метеонаблюдения</small></span></div>
+      <div id="account" class="account" hidden><span id="account-name"></span><button id="logout" class="subtle" type="button">Выйти</button></div>
+    </div>
+  </header>
+  <main id="content" class="shell">
+    <section id="login" hidden class="login-layout">
+      <div class="intro landscape"><div><p class="intro-location">Центрально-Лесной заповедник</p>
+        <h1>Архив<br>метеонаблюдений</h1>
+        <p class="intro-copy">Станции урочища Красное. От исходного измерения до проверенного отчёта.</p></div>
+        <div class="isobars" aria-hidden="true"></div>
+      </div>
+      <form id="login-form" class="card login-form">
+        <h2>Войти в кабинет</h2><label for="token">Ключ доступа</label>
+        <input type="password" id="token" autocomplete="current-password" required>
+        <p class="hint">Используйте ключ, выданный для вашей роли.</p>
+        <button class="primary" type="submit">Открыть кабинет</button>
+      </form>
+    </section>
+    <div id="workspace" hidden>
+      <header class="workspace-heading landscape"><div class="heading-copy"><p id="role" class="intro-location"></p><h1 id="page-title">Каталог наборов</h1></div><div class="isobars" aria-hidden="true"></div></header>
+      <nav id="tabs" aria-label="Разделы кабинета">
+        <button type="button" data-tab="catalog">Каталог</button>
+        <button type="button" data-tab="import" id="import-tab">Импорт</button>
+        <button type="button" data-tab="report">Отчёт</button>
+        <button type="button" data-tab="events">Уведомления</button>
+      </nav>
+      <section id="catalog" class="view" hidden>
+        <div class="section-heading"><h2>Наборы данных</h2><div class="catalog-filters"><label>Тип данных<select id="catalog-type"><option value="">Все типы</option></select></label><label class="search-label">Поиск<input id="search" type="search" placeholder="Станция, поставщик или набор"></label></div></div>
+        <div id="datasets" class="card-grid"></div>
+        <h2 class="spaced">Внешние источники</h2><div id="external" class="card-grid"></div>
+      </section>
+      <section id="import" class="view" hidden>
+        <form id="upload-form" class="card upload">
+          <h2>Загрузить наблюдения</h2>
+          <p class="hint">Файл архива ZIP, таблица CSV или XLSX, данные JSON. Перед импортом можно проверить листы и сопоставление колонок.</p>
+          <label>Исходный файл<input id="upload" type="file" accept=".csv,.zip,.xlsx,.json" required></label>
+          <div class="actions"><button class="primary" type="submit">Посмотреть данные</button><button id="demo-preview" type="button">Открыть архив заповедника</button></div>
+        </form>
+        <form id="confirm-form" class="card" hidden>
+          <h2>Проверка импорта</h2>
+          <div class="form-grid"><label>Название набора<input id="import-title" maxlength="150" required></label>
+            <label>Название шаблона <small>(по желанию)</small><input id="template" maxlength="80"></label></div>
+          <p id="preview-count" class="hint"></p><div id="file-mappings"></div>
+          <button class="primary" type="submit">Подтвердить и импортировать</button>
+        </form>
+      </section>
+      <section id="report" class="view" hidden>
+        <form id="filters" class="card">
+          <h2>Выбор среза</h2>
+          <div class="filter-grid">
+            <label>Набор<select id="dataset" required></select></label>
+            <label>Станция<select id="station" required></select></label>
+            <label>Показатель<select id="parameter" required></select></label>
+            <label>Период<select id="period-mode"><option value="month">Календарный месяц</option><option value="range">Диапазон дат</option></select></label>
+            <label id="month-field">Месяц<input id="month" type="month" value="2024-04" required></label>
+            <label id="range-start-field" hidden>Начало<input id="range-start" type="date" value="2024-04-01" disabled required></label>
+            <label id="range-end-field" hidden>Окончание<input id="range-end" type="date" value="2024-05-31" disabled required></label>
+            <label>Группировка<select id="step"><option value="day">Сутки</option><option value="decade">Декада</option><option value="month">Месяц</option></select></label>
+            <label>Шаблон сводки<select id="report-template"><option value="weather">Метеосводка</option><option value="quality">Полнота и качество</option></select></label>
+          </div>
+          <button class="primary" type="submit">Сформировать отчёт</button>
+        </form>
+        <p id="report-empty" class="empty">Выберите набор, станцию и период для расчёта.</p>
+        <article id="report-result" class="card report-result" hidden>
+          <div class="section-heading"><div><p id="report-subtitle" class="kicker"></p><h2 id="report-title"></h2></div><button type="button" id="print">Печать</button></div>
+          <div class="kpis" id="kpis"></div>
+          <div id="report-actions" class="actions"></div><p id="saved-link" aria-live="polite"></p>
+          <details id="provenance" class="disclosure"><summary>Источник, методика и покрытие</summary><dl id="report-meta" class="facts"></dl></details>
+          <div id="snapshot-events" hidden></div>
+          <details id="settings" class="disclosure"><summary>Настроить колонки таблицы</summary><div id="table-settings"></div></details>
+          <div id="table" class="table-scroll"></div>
+          <details id="quality" class="disclosure"><summary>Профиль качества</summary><div id="profile-data"></div></details>
+          <details id="baseline" class="disclosure"><summary>Среднее за выбранные годы</summary><form id="baseline-form" class="inline-form"><label>Первый год<input id="first-year" type="number" min="1" max="9999" value="1992" required></label><label>Последний год<input id="last-year" type="number" min="1" max="9999" value="2021" required></label><button type="submit">Рассчитать</button></form><div id="baseline-result"></div></details>
+          <div id="evidence" hidden class="evidence"><h3>Исходные наблюдения</h3><div id="evidence-data"></div></div>
+        </article>
+      </section>
+      <section id="events" class="view" hidden><div class="section-heading"><h2>События по доступным наборам</h2><button type="button" id="refresh-events">Обновить</button></div><div id="event-list" class="event-list"></div>
+        <div id="event-tools" class="card spaced" hidden>
+          <h2>Правило наблюдения</h2><form id="rule-form">
+            <div class="form-grid"><label>Набор<select id="rule-dataset" required></select></label><label>Станция<select id="rule-station" required></select></label><label>Показатель<select id="rule-parameter" required></select></label>
+              <label>Верхний порог<input id="threshold" type="number" step="any" required value="20"></label><label>Продолжительность, мин<input id="duration" type="number" min="0" required value="60"></label><label>Минимум сроков<input id="min-slots" type="number" min="1" required value="2"></label>
+              <label>Устаревание, мин<input id="stale" type="number" min="1" required value="180"></label><label>Получатель<input id="recipient" required></label></div>
+            <button type="submit">Сохранить правило</button>
+          </form>
+          <hr><h3>Воспроизведение архива</h3><p class="hint">В поток поступят исходные наблюдения выбранной станции и даты. Для воспроизведения используется выбранный выше набор и показатель.</p>
+          <form id="replay-form" class="inline-form"><label>Дата<input id="replay-date" type="date" value="2024-04-29" required></label><button type="submit">Воспроизвести день</button></form>
+          <div id="replay-result"></div>
+        </div>
+      </section>
+    </div>
+    <div id="notice" role="status" aria-live="polite" hidden></div>
+  </main>
+</body>
+</html>

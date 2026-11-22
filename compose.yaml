@@ -1,0 +1,76 @@
+name: reserve-weather
+x-api: &api
+  build: .
+  env_file: .env
+  environment: &api-env
+    DATABASE_URL: postgresql+psycopg://weather:${POSTGRES_PASSWORD:?generate .env}@db:5432/weather
+    WEATHER_HOME: /var/lib/weather
+    GRAFANA_RESEARCH_URL: http://grafana-research:3000
+    GRAFANA_BUSINESS_URL: http://grafana-business:3000
+    ALERT_WEBHOOK_URL: ${ALERT_WEBHOOK_URL:-http://receipt:8000/events}
+  volumes:
+    - observations:/var/lib/weather
+  depends_on:
+    db:
+      condition: service_healthy
+x-grafana: &grafana
+  image: grafana/grafana:13.3.1
+  environment: &grafana-env
+    GF_PLUGINS_PREINSTALL_SYNC: yesoreyeram-infinity-datasource@4.1.8
+    GF_AUTH_ANONYMOUS_ENABLED: "true"
+    GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    GF_USERS_ALLOW_SIGN_UP: "false"
+    GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    GF_ANALYTICS_REPORTING_ENABLED: "false"
+    WEATHER_API_ORIGIN: http://api:8000
+services:
+  db:
+    image: postgres:18
+    environment:
+      POSTGRES_DB: weather
+      POSTGRES_USER: weather
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?generate .env}
+    volumes:
+      - postgres:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL","pg_isready -U weather -d weather"]
+      interval: 4s
+      timeout: 3s
+      retries: 20
+  api:
+    <<: *api
+    ports: ["127.0.0.1:${PORT:-8123}:8000"]
+  worker:
+    <<: *api
+    command: ["python","-m","weather.worker"]
+  receipt:
+    build: .
+    command: ["python","-m","uvicorn","ops.receipt:app","--host","0.0.0.0","--port","8000"]
+    volumes:
+      - receipt:/var/lib/weather
+  grafana-research:
+    <<: *grafana
+    environment:
+      <<: *grafana-env
+      GF_SERVER_ROOT_URL: ${PUBLIC_ORIGIN:-http://localhost:8123}/charts/research/
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_RESEARCH_ADMIN:?generate .env}
+      WEATHER_CHART_KEY: ${GRAFANA_RESEARCH_KEY:?generate .env}
+    volumes:
+      - ./ops/grafana:/etc/grafana/provisioning:ro
+      - research-charts:/var/lib/grafana
+  grafana-business:
+    <<: *grafana
+    environment:
+      <<: *grafana-env
+      GF_SERVER_ROOT_URL: ${PUBLIC_ORIGIN:-http://localhost:8123}/charts/business/
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_BUSINESS_ADMIN:?generate .env}
+      WEATHER_CHART_KEY: ${GRAFANA_BUSINESS_KEY:?generate .env}
+    volumes:
+      - ./ops/grafana:/etc/grafana/provisioning:ro
+      - business-charts:/var/lib/grafana
+volumes:
+  postgres:
+  observations:
+  receipt:
+  research-charts:
+  business-charts:

@@ -1,0 +1,30 @@
+services:
+  edge:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      WEATHER_DOMAIN: ${WEATHER_DOMAIN:?set the public domain}
+    volumes:
+      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+  api:
+    restart: unless-stopped
+  worker:
+    restart: unless-stopped
+  db:
+    restart: unless-stopped
+  grafana-research:
+    restart: unless-stopped
+  grafana-business:
+    restart: unless-stopped
+  receipt:
+    restart: unless-stopped
+volumes:
+  caddy-data:
+  caddy-config:
