@@ -1,0 +1,36 @@
+{% extends "catalog/base.html" %}
+{% block title %}{{ station.name }}{% endblock %}
+{% block content %}
+<a class="back" href="{% url 'catalog' %}?place={{ station.location_id }}">← Станции этого места</a>
+<header class="section-header">
+  <div><h1>{{ station.name }}</h1><p>{{ station.location }} · {{ station.get_profile_display }}</p></div>
+  {% if perms.catalog.add_dataset %}<a class="button" href="{% url 'upload' station.pk %}">Загрузить наблюдения</a> <a class="button secondary" href="{% url 'add-stream' station.pk %}">Добавить поток</a>{% endif %}
+</header>
+{% if superset_url %}<p class="report-actions"><a class="button secondary" href="{{ superset_url }}">Сравнить станции в Superset</a></p>{% endif %}
+{% if streams %}
+  <h2>Мониторинг</h2>
+  <ul>{% for stream in streams %}<li><a href="{% url 'stream-detail' stream.key %}">{{ stream.name }}</a> · {{ stream.get_mode_display }}</li>{% endfor %}</ul>
+{% endif %}
+{% if perms.catalog.view_dataset %}
+  <h2>Выгрузки</h2>
+  {% if datasets %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Файл</th><th scope="col">Период наблюдений</th><th scope="col" class="count">Записей</th><th scope="col">Добавил</th></tr></thead>
+        <tbody>
+          {% for dataset in datasets %}
+            <tr>
+              <th scope="row"><a href="{% url 'dataset-report' dataset.version %}">{{ dataset.original_name }}</a><small>{{ dataset.metric_labels|join:", " }}</small></th>
+              <td>{{ dataset.first_observation|date:"d.m.Y" }} — {{ dataset.last_observation|date:"d.m.Y" }}</td>
+              <td class="count">{{ dataset.row_count }}</td>
+              <td>{{ dataset.uploaded_by.get_username }}<small>{{ dataset.uploaded_at|date:"d.m.Y H:i" }}</small></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty"><h3>Выгрузок пока нет</h3><p>Здесь появятся файлы наблюдений для этой станции.</p></div>
+  {% endif %}
+{% endif %}
+{% endblock %}

@@ -1,0 +1,108 @@
+name: zapovednik-meteo-catalog
+
+x-app: &application
+  build:
+    context: ../..
+    dockerfile: deploy/catalog/Dockerfile
+  environment: &application-env
+    METEO_SECRET_KEY: ${METEO_SECRET_KEY:?Set METEO_SECRET_KEY in the deployment .env}
+    METEO_ALLOWED_HOSTS: ${METEO_PUBLIC_HOST:?Set METEO_PUBLIC_HOST in the deployment .env}
+    METEO_PUBLIC_URL: https://${METEO_PUBLIC_HOST}
+    METEO_GRAFANA_URL: http://grafana:3000
+    METEO_GRAFANA_PASSWORD: ${METEO_GRAFANA_PASSWORD:?Set METEO_GRAFANA_PASSWORD in the deployment .env}
+    METEO_GRAFANA_PROXY_KEY: ${METEO_GRAFANA_PROXY_KEY:?Set METEO_GRAFANA_PROXY_KEY in the deployment .env}
+    METEO_INFLUX_URL: http://influxdb:8086
+    METEO_INFLUX_TOKEN: ${METEO_INFLUX_TOKEN:?Set METEO_INFLUX_TOKEN in the deployment .env}
+    METEO_OPEN_METEO_KEY: ${METEO_OPEN_METEO_KEY:-}
+    METEO_WEBHOOK_URL: ${METEO_WEBHOOK_URL:-}
+  volumes:
+    - catalog-data:/data
+  restart: unless-stopped
+
+services:
+  app:
+    <<: *application
+    environment:
+      <<: *application-env
+      METEO_AI_FOLDER_ID: ${METEO_AI_FOLDER_ID:-}
+      METEO_AI_API_KEY: ${METEO_AI_API_KEY:-}
+      METEO_AI_MODEL: ${METEO_AI_MODEL:-deepseek-v4.1-flash}
+      METEO_MAP_STYLE_URL: ${METEO_MAP_STYLE_URL:-}
+      METEO_SUPERSET_URL: ${METEO_SUPERSET_URL:-}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import os, urllib.request as u; u.urlopen(u.Request('http://127.0.0.1:8000/health/', headers={'Host': os.environ['METEO_ALLOWED_HOSTS'].split(',')[0], 'X-Forwarded-Proto': 'https'}))"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  alerts:
+    <<: *application
+    command: ["python", "manage.py", "monitor_weather"]
+    depends_on:
+      app:
+        condition: service_healthy
+
+  dashboards:
+    <<: *application
+    command: ["python", "manage.py", "monitor_weather", "--grafana"]
+    depends_on:
+      app:
+        condition: service_healthy
+      grafana:
+        condition: service_started
+      influxdb:
+        condition: service_started
+
+  influxdb:
+    image: influxdb:2.8
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: meteo
+      DOCKER_INFLUXDB_INIT_PASSWORD: ${METEO_INFLUX_PASSWORD:?Set METEO_INFLUX_PASSWORD in the deployment .env}
+      DOCKER_INFLUXDB_INIT_ORG: meteo
+      DOCKER_INFLUXDB_INIT_BUCKET: setup
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: ${METEO_INFLUX_TOKEN}
+    volumes:
+      - influx-data:/var/lib/influxdb2
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:12.3.7
+    environment:
+      GF_SERVER_ROOT_URL: https://${METEO_PUBLIC_HOST}/grafana/
+      GF_SECURITY_ADMIN_PASSWORD: ${METEO_GRAFANA_PASSWORD}
+      GF_AUTH_DISABLE_LOGIN_FORM: "true"
+      GF_AUTH_PROXY_ENABLED: "true"
+      GF_AUTH_PROXY_AUTO_SIGN_UP: "false"
+      GF_AUTH_PROXY_ENABLE_LOGIN_TOKEN: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_USERS_VIEWERS_CAN_EDIT: "false"
+      GF_LIVE_MAX_CONNECTIONS: "0"
+    volumes:
+      - grafana-data:/var/lib/grafana
+    restart: unless-stopped
+
+  https:
+    image: caddy:2-alpine
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      METEO_PUBLIC_HOST: ${METEO_PUBLIC_HOST:?Set METEO_PUBLIC_HOST in the deployment .env}
+      METEO_SITE_ADDRESS: ${METEO_PUBLIC_HOST:?Set METEO_PUBLIC_HOST in the deployment .env}
+      METEO_GRAFANA_PROXY_KEY: ${METEO_GRAFANA_PROXY_KEY}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    restart: unless-stopped
+
+volumes:
+  catalog-data:
+  caddy-data:
+  caddy-config:
+  influx-data:
+  grafana-data:

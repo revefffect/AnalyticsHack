@@ -1,0 +1,18 @@
+# Local integration stand. Only the loopback interface is published.
+services:
+  app:
+    environment:
+      METEO_DEBUG: "1"
+      METEO_PUBLIC_URL: http://127.0.0.1:8060
+      METEO_ALLOWED_HOSTS: 127.0.0.1,localhost
+  alerts:
+    environment:
+      METEO_PUBLIC_URL: http://127.0.0.1:8060
+  grafana:
+    environment:
+      GF_SERVER_ROOT_URL: http://127.0.0.1:8060/grafana/
+  https:
+    environment:
+      METEO_SITE_ADDRESS: http://127.0.0.1
+    ports: !override
+      - "127.0.0.1:8060:80"

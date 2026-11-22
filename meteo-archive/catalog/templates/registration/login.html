@@ -1,0 +1,14 @@
+{% extends "catalog/base.html" %}
+{% block title %}Вход{% endblock %}
+{% block content %}
+<div class="login">
+  <h1>Вход в метеоархив</h1>
+  <p>Используй учётную запись, которую выдал администратор.</p>
+  <form class="editor" method="post">
+    {% csrf_token %}
+    {{ form.as_p }}
+    {% if next %}<input type="hidden" name="next" value="{{ next }}">{% endif %}
+    <button class="button" type="submit">Войти</button>
+  </form>
+</div>
+{% endblock %}

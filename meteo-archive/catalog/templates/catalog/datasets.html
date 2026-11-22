@@ -1,0 +1,16 @@
+{% extends "catalog/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+<header class="section-header"><div><h1>{{ title }}</h1><p>Доступные версии наблюдений, архивные источники и сохранённые отчёты.</p></div></header>
+<form class="filters" method="get">
+  <div><label for="q">Поиск</label><input id="q" name="q" value="{{ query }}" placeholder="Станция, файл или поставщик"></div>
+  <div><label for="place">Место</label><select name="place" id="place"><option value="">Все места</option>{% for location in locations %}<option value="{{ location.pk }}" {% if place == location.pk|stringformat:"s" %}selected{% endif %}>{{ location }}</option>{% endfor %}</select></div>
+  <div><label for="kind">Тип данных</label><select name="kind" id="kind"><option value="">Все типы</option>{% for value, label in kinds %}<option value="{{ value }}" {% if value == kind %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></div>
+  <button class="button">Показать</button>
+</form>
+{% if saved %}<h2>Сохранённые отчёты</h2><ul>{% for item in saved %}<li><a href="{% url 'saved-report' item.key %}">{{ item.dataset.station.name }} · {{ item.created_at|date:"d.m.Y H:i" }}</a></li>{% endfor %}</ul>{% endif %}
+{% if datasets %}<div class="table-wrap"><table><thead><tr><th scope="col">Набор</th><th scope="col">Станция и период</th><th scope="col">Тип и доступ</th></tr></thead><tbody>
+{% for dataset in datasets %}<tr><th scope="row"><a href="{% url 'dataset-report' dataset.version %}">{{ dataset.original_name }}</a><small>{{ dataset.source_meta.provider|default:dataset.uploaded_by.username }} · {{ dataset.uploaded_at|date:"d.m.Y" }}</small></th><td>{{ dataset.station }} · {{ dataset.station.location }}<small>{{ dataset.first_observation|date:"d.m.Y" }} — {{ dataset.last_observation|date:"d.m.Y" }} · {{ dataset.row_count }} записей</small></td><td>{{ dataset.get_source_kind_display }}<small>{% if dataset.published %}Открыт сотрудникам{% elif dataset.uploaded_by_id == user.pk %}Владелец{% else %}Выдан доступ{% endif %}</small></td></tr>{% endfor %}
+</tbody></table></div>{% else %}<div class="empty"><h2>Доступных наборов пока нет</h2><p>Загрузи данные в карточку станции или запроси доступ у владельца.</p></div>{% endif %}
+<h2 class="spaced">Внешние источники</h2><ul class="source-list">{% for name, status, link in sources %}<li><a href="{{ link }}">{{ name }}</a><small>{{ status }}</small></li>{% endfor %}</ul>
+{% endblock %}

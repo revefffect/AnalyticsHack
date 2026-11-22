@@ -1,0 +1,14 @@
+.git
+.env
+**/.env
+**/.env.*
+.venv
+**/__pycache__
+**/*.pyc
+storage
+output
+data
+backups
+meteo_clgz_hackathon
+meteo_hack_dataset*.zip
+catalog/static/catalog/vendor/

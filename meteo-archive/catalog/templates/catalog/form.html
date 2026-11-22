@@ -1,0 +1,13 @@
+{% extends "catalog/base.html" %}
+{% block title %}{{ title }}{% endblock %}
+{% block content %}
+{% if station %}<a class="back" href="{% url 'station' station.pk %}">← {{ station.name }}</a>{% else %}<a class="back" href="{% url 'catalog' %}">← Каталог станций</a>{% endif %}
+<h1>{{ title }}</h1>
+{% if station %}<p>{{ station.name }} · {{ station.location }}</p>{% endif %}
+{% if description %}<p>{{ description }}</p>{% endif %}
+<form class="editor" method="post"{% if form.is_multipart %} enctype="multipart/form-data"{% endif %}>
+  {% csrf_token %}
+  {{ form.as_p }}
+  <button class="button" type="submit">{{ action }}</button>
+</form>
+{% endblock %}

@@ -1,0 +1,14 @@
+{% extends "catalog/base.html" %}
+{% block title %}Предпросмотр импорта{% endblock %}
+{% block content %}
+<a class="back" href="{% url 'station' draft.station_id %}">← {{ draft.station.name }}</a>
+<h1>Предпросмотр импорта</h1>
+<p>{{ draft.filename }} · {{ table_count }} таблиц. Записи зачитываются после подтверждения сопоставления.</p>
+{% if presets %}<form class="filters" method="get"><label for="mapping">Сохранённый шаблон</label><select name="mapping" id="mapping"><option value="">Автоопределение</option>{% for preset in presets %}<option value="{{ preset.name }}">{{ preset.name }}</option>{% endfor %}</select><button class="button secondary">Применить</button></form>{% endif %}
+<h2>{{ sample.name }}</h2>
+<p>Станция по умолчанию · {{ draft.station }}. Архив организаторов распределяется по АМЕ-60, Кр1 и Кр2 по именам вложенных файлов.</p>
+<p>{% for column, kind in kinds %}{{ column }} · {{ kind }}{% if not forloop.last %}, {% endif %}{% endfor %}</p>
+<p>Записей в таблице {{ sample.frame|length }}{% if sample.encoding %} · {{ sample.encoding }}{% endif %}{% if sample.delimiter %} · разделитель «{{ sample.delimiter }}»{% endif %}</p>
+<div class="table-wrap"><table><thead><tr>{% for column in columns %}<th scope="col">{{ column }}</th>{% endfor %}</tr></thead><tbody>{% for row in preview %}<tr>{% for value in row %}<td>{{ value|truncatechars:80 }}</td>{% endfor %}</tr>{% endfor %}</tbody></table></div>
+<form class="editor" method="post">{% csrf_token %}{{ form.as_p }}<button class="button">Подтвердить импорт</button></form>
+{% endblock %}

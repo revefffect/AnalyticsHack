@@ -1,0 +1,15 @@
+{% extends "catalog/base.html" %}
+{% block title %}Уведомления{% endblock %}
+{% block content %}
+<h1>Уведомления</h1>
+<section><h2>События</h2>
+{% for event in events %}
+<p><a href="{% url 'stream-detail' event.rule.stream.key %}?metric={{ event.details.metric }}">{{ event.details.rule_name }}</a>
+· {% if event.category == 'stale' %}Свежесть данных{% else %}Порог{% endif %}
+· {% if event.state == 'triggered' %}Сработало{% else %}Восстановлено{% endif %}
+· {{ event.observation|date:"d.m.Y H:i:s" }} · Версия правила {{ event.version }} · Вебхук {{ event.delivery }}</p>
+{% empty %}<p>События появятся после срабатывания правила.</p>{% endfor %}</section>
+<section><h2>Доступные потоки</h2>
+{% for stream in streams %}<p><a href="{% url 'stream-detail' stream.key %}">{{ stream.name }}</a> · {{ stream.station }} · {{ stream.get_mode_display }}</p>
+{% empty %}<p>Потоки появятся после подключения станции.</p>{% endfor %}</section>
+{% endblock %}

@@ -1,0 +1,45 @@
+{% extends "catalog/base.html" %}
+{% load static %}
+{% block title %}Сводка наблюдений{% endblock %}
+{% block content %}
+<a class="back" href="{% url 'datasets' %}">← Каталог наборов</a>
+<header class="section-header"><div><h1>{{ dataset.station.name }}</h1><p>{{ dataset.station.location }} · {{ dataset.get_source_kind_display }} · {{ dataset.original_name }}</p></div></header>
+{% if saved_report %}<p>Сохранённый отчёт от {{ saved_report.created_at|date:"d.m.Y H:i" }} · версия {{ dataset.version }}</p>{% else %}
+<form class="report-filters" method="get"><div class="form-grid">
+  {% for field in form %}{% if field.name != 'column_order' and field.name != 'column_labels' %}<div>{{ field.label_tag }}{{ field }}{{ field.errors }}</div>{% endif %}{% endfor %}
+</div>{{ form.non_field_errors }}<details><summary>Настроить колонки</summary><p>{{ form.column_order.label_tag }}{{ form.column_order }}<small>{{ form.column_order.help_text }}</small></p><p>{{ form.column_labels.label_tag }}{{ form.column_labels }}<small>{{ form.column_labels.help_text }}</small></p></details><button class="button">Рассчитать отчёт</button></form>
+{% endif %}
+{% if info %}
+<p class="report-actions"><a class="button secondary" href="{% url 'dataset-assistant' dataset.version %}{% if query %}?{{ query }}{% endif %}">Открыть в Метеоагенте</a></p>
+<div class="actions report-actions"><a class="button secondary" href="?{{ query }}{% if query %}&amp;{% endif %}export=csv">Скачать CSV</a><a class="button secondary" href="?{{ query }}{% if query %}&amp;{% endif %}export=json">Скачать JSON</a><a href="{% url 'download' dataset.pk %}">Исходник</a>{% if dashboard.state == "ready" %}<a href="{% url 'grafana-open' dataset.version %}?{{ query }}">Открыть Grafana</a>{% elif dashboard %}<small>Grafana · {{ dashboard.state }}</small>{% endif %}</div>
+{% if not saved_report %}<form method="post" action="{% url 'save-report' dataset.version %}">{% csrf_token %}{% for field in form %}<input type="hidden" name="{{ field.name }}" value="{{ field.value|default_if_none:'' }}">{% endfor %}<button class="quiet">Сохранить этот отчёт</button></form>{% endif %}
+{% if options.template == "operations" %}<h2>Оперативный отчёт</h2>{% else %}<h2>Научная сводка</h2>{% endif %}
+<p>{{ metrics_label }}, {{ info.unit }} · {{ info.period_from }} — {{ info.period_to }}</p>
+<dl class="summary-grid"><div><dt>{{ profile.metric_days }} из {{ profile.days }}</dt><dd>Пригодные сутки показателя</dd></div><div><dt>{{ profile.station_days }} из {{ profile.days }}</dt><dd>Пригодные сутки станции</dd></div><div><dt>{{ profile.valid_rows }} из {{ profile.rows }}</dt><dd>Замеры прошли проверку</dd></div><div><dt>{{ profile.gap }}</dt><dd>Неполных дней подряд</dd></div></dl>
+{% if historical %}<p>Среднее за выбранный период {{ historical.first_year }}–{{ historical.last_year }} · {{ historical.reference|floatformat:2|default:"—" }} {{ info.unit }} · пригодных лет {{ historical.years }}{% if historical.difference is not None %} · отклонение {{ historical.difference|floatformat:2 }} {{ info.unit }}{% endif %}{% if historical.slope is not None %} · описательное изменение {{ historical.slope|floatformat:2 }} {{ info.unit }} за десятилетие{% endif %}.</p>{% endif %}
+<section id="results" class="chart-shell" aria-label="График наблюдений и покрытия">
+  <p class="chart-hint" data-chart-hint>Таблица под графиком открывает подробности каждого периода.</p>
+  <div id="weather-chart" class="weather-chart" hidden></div>
+</section>
+{{ chart_data|json_script:"weather-chart-data" }}
+<script defer src="{% static 'catalog/vendor/echarts.min.js' %}"></script>
+<script defer src="{% static 'catalog/report-chart.js' %}"></script>
+<div class="table-wrap"><table><thead><tr>{% for label in headers %}<th scope="col">{{ label }}</th>{% endfor %}<th scope="col">Подробности</th></tr></thead><tbody>{% for record in records %}<tr>{% for value in record.values %}<td>{{ value|default_if_none:"—" }}</td>{% endfor %}<td><a href="{{ record.detail_url }}">{% if options.step == 'day' %}Разобрать день{% else %}Открыть сутки{% endif %}</a></td></tr>{% endfor %}</tbody></table></div>
+{% if record_count > 200 %}<p>Показано 200 из {{ record_count }} периодов. Полная таблица доступна в выгрузке.</p>{% endif %}
+<h2 class="spaced" id="qc">Контроль качества и исходные записи</h2>
+<p>Порог {{ profile.expected }} сроков или часов за сутки. Конфликтов {{ profile.conflicts }}. Часовой пояс {{ info.source_timezone }}.</p>
+<p>Пригодных сроков или часов {{ profile.actual }}, сумма суточных минимумов {{ profile.expected_total }}. Пустых ячеек {{ profile.missing_cells }}, записей без колонки {{ profile.missing_columns }}, измеренных нулей {{ profile.measured_zero }}.</p>
+{% if dataset.source_meta.identical_duplicates %}<p>Точных повторов при импорте всего набора {{ dataset.source_meta.identical_duplicates }}.</p>{% endif %}
+{% if profile.gap_runs %}<p>Длинные серии неполных дней{% for run in profile.gap_runs %} · {{ run.start|date:"d.m.Y" }} — {{ run.end|date:"d.m.Y" }} ({{ run.length }}){% endfor %}.</p>{% endif %}
+{% if profile.intervals %}<p>Частые интервалы между записями{% for span, count in profile.intervals %} · {{ span|floatformat }} мин ({{ count }}){% endfor %}.</p>{% endif %}
+{% if profile.flags %}<p>Флаги{% for flag, count in profile.flags %} · <code>{{ flag }}</code> ({{ count }}){% endfor %}.</p>{% endif %}
+{% if profile.jumps %}<p>Скачки температуры более 8 °C за 2 часа или меньше отмечены для разбора. Найдено как минимум {{ profile.jumps|length }}.</p>{% endif %}
+{% if source_rows %}<div class="table-wrap"><table><thead><tr><th scope="col">Исходное время</th><th scope="col">Значение</th><th scope="col">Решение и флаг</th><th scope="col">Файл и строка</th></tr></thead><tbody>{% for row in source_rows %}<tr><td>{{ row.datetime }}<small>{{ row.source_timezone }}</small></td><td>{{ row.value|default_if_none:"—" }}</td><td>{{ row.status }}<small>{{ row.flag }}</small></td><td>{{ row.file }}<small>Строка {{ row.line }}</small></td></tr>{% endfor %}</tbody></table></div>{% endif %}
+<p><a href="?{{ query }}{% if query %}&amp;{% endif %}export=source">Скачать исходные строки с флагами</a></p>
+<h2 class="spaced">Происхождение</h2><p>Поставщик {{ info.provider }} · версия {{ info.dataset_version }} · QC {{ info.qc_version }} · метод {{ info.method }} · обновление {{ dataset.uploaded_at|date:"d.m.Y H:i" }}.</p>
+{% if info.attribution %}<p>{{ info.attribution }}</p>{% endif %}{% if dataset.source_meta.terms %}<p>{{ dataset.source_meta.terms }}</p>{% endif %}
+{% if events %}<h2 class="spaced">События</h2><ul>{% for event in events %}<li>{{ event.observation|date:"d.m.Y H:i" }} · <a href="{% url 'stream-detail' event.rule.stream.key %}?metric={{ event.details.metric }}">{{ event.details.rule_name }}</a> · {% if event.state == 'triggered' %}сработало{% else %}восстановлено{% endif %}{% if event.details.value != None %} · {{ event.details.value }}{% endif %}</li>{% endfor %}</ul>{% endif %}
+{% if owner %}<details class="spaced"><summary>Доступ к версии</summary>
+<form class="filters" method="post" action="{% url 'dataset-share' dataset.version %}">{% csrf_token %}<div><label for="username">Логин сотрудника</label><input id="username" name="username"></div><button class="button secondary" name="action" value="grant">Выдать доступ</button><button class="quiet" name="action" value="revoke">Отозвать</button>{% if dataset.published %}<button class="quiet" name="action" value="unpublish">Убрать из общего каталога</button>{% else %}<button class="quiet" name="action" value="publish">Опубликовать в общем каталоге</button>{% endif %}</form></details>{% endif %}
+{% endif %}
+{% endblock %}

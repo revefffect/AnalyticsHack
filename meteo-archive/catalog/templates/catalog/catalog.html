@@ -1,0 +1,47 @@
+{% extends "catalog/base.html" %}
+{% load static %}
+{% block title %}Каталог станций{% endblock %}
+{% block content %}
+<header class="section-header">
+  <div><h1>Каталог станций</h1><p>Найди место наблюдений, чтобы открыть станцию и её выгрузки.</p></div>
+  <div class="actions">
+    {% if perms.catalog.add_location %}<a class="button secondary" href="{% url 'add-location' %}">Добавить место</a>{% endif %}
+    {% if perms.catalog.add_station %}<a class="button" href="{% url 'add-station' %}{% if filters.place.value %}?place={{ filters.place.value|urlencode }}{% endif %}">Добавить станцию</a>{% endif %}
+  </div>
+</header>
+<form class="filters" method="get">
+  <div class="filter-field">
+    {{ filters.place.label_tag }}
+    {{ filters.place }}
+    {{ filters.place.errors }}
+  </div>
+  <button type="submit" class="button">Показать станции</button>
+  {% if filters.place.value %}<a href="{% url 'catalog' %}">Сбросить</a>{% endif %}
+</form>
+{% if stations %}
+  <section class="map-panel" aria-labelledby="station-map-title">
+    <div class="map-panel-heading"><h2 id="station-map-title">Карта станций</h2>
+      <p data-map-status role="status">Карта появится для станций с координатами.</p></div>
+    <div class="station-map" id="station-map" hidden
+         data-station-source="{% url 'station-geojson' %}{% if filters.place.value %}?place={{ filters.place.value|urlencode }}{% endif %}"
+         data-map-style="{{ map_style_url }}"></div>
+  </section>
+  <link rel="stylesheet" href="{% static 'catalog/vendor/maplibre-gl.css' %}">
+  <script defer src="{% static 'catalog/vendor/maplibre-gl.js' %}"></script>
+  <script defer src="{% static 'catalog/station-map.js' %}"></script>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th scope="col">Станция</th><th scope="col">Город или территория</th><th scope="col">Профиль</th>{% if perms.catalog.view_dataset %}<th scope="col" class="count">Файлы</th>{% endif %}</tr></thead>
+      <tbody>
+        {% for station in stations %}
+          <tr><th scope="row"><a href="{% url 'station' station.pk %}">{{ station.name }}</a></th>
+              <td>{{ station.location.name }}{% if station.location.region %}<small>{{ station.location.region }}</small>{% endif %}</td>
+              <td>{{ station.get_profile_display }}</td>{% if perms.catalog.view_dataset %}<td class="count">{{ station.dataset_count }}</td>{% endif %}</tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+{% else %}
+  <div class="empty"><h2>Станций в этой выборке пока нет</h2><p>Выбери другое место или добавь станцию, если у тебя есть доступ.</p></div>
+{% endif %}
+{% endblock %}

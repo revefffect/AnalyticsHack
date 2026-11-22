@@ -1,0 +1,23 @@
+name: meteo-superset
+services:
+  superset:
+    build: .
+    environment:
+      SUPERSET_SECRET_KEY: ${SUPERSET_SECRET_KEY:?Set a secret key in the local env file}
+      SUPERSET_HOME: /app/superset_home
+      SUPERSET_CONFIG_PATH: /app/meteo-superset/superset_config.py
+      METEO_DASHBOARD_MART: /app/analytics/dashboard-meteo.duckdb
+      METEO_SUPERSET_ADMIN: ${METEO_SUPERSET_ADMIN:-admin}
+      METEO_SUPERSET_ADMIN_PASSWORD: ${METEO_SUPERSET_ADMIN_PASSWORD:?Set the initial local Superset admin password}
+    ports:
+      - "127.0.0.1:8088:8088"
+    volumes:
+      - superset-home:/app/superset_home
+      - type: bind
+        source: ${METEO_DASHBOARD_MART_FILE:-../../output/analytics/dashboard-meteo.duckdb}
+        target: /app/analytics/dashboard-meteo.duckdb
+        read_only: true
+        bind:
+          create_host_path: false
+volumes:
+  superset-home:

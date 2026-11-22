@@ -1,0 +1,23 @@
+{% extends "catalog/base.html" %}
+{% block title %}{{ stream.name }}{% endblock %}
+{% block content %}
+<a class="back" href="{% url 'alerts' %}">← Уведомления</a>
+<h1>{{ stream.name }}</h1>
+<p>{{ stream.station }} · {{ stream.get_mode_display }}</p>
+{% if token %}
+<h2>Вход станции</h2>
+<p>Сохрани токен при создании. Отправляй его в заголовке <code>Authorization: Bearer …</code>.</p>
+<p><code>{{ endpoint }}</code></p><p><code>{{ token }}</code></p>
+<a class="button" href="{% url 'stream-detail' stream.key %}">Открыть настройки потока</a>
+{% else %}
+<p>Последнее измерение · {{ stream.latest_observation|date:"d.m.Y H:i:s"|default:"ожидается" }}<br>
+Последний приём · {{ stream.latest_receipt|date:"d.m.Y H:i:s"|default:"ожидается" }}</p>
+{% if form and stream.dashboard.state == "ready" %}<a href="{% url 'stream-grafana' stream.key %}">Открыть поток в Grafana</a>{% endif %}
+{% if stream.latest_receipt %}<script src="{% url 'plotly-js' %}"></script>{{ chart|safe }}{% endif %}
+{% for rule in rules %}<p><a href="?metric={{ rule.metric }}">{{ rule.name }}</a> ·
+{% if rule.state.stale_since %}Устарел{% elif rule.state.status == 'active' %}Сработало{% elif rule.state.status == 'ok' %}В пределах нормы{% else %}Недостаточно данных{% endif %}
+{% if rule.state.coverage != None %} · покрытие {{ rule.state.coverage|floatformat:2 }}{% endif %}</p>{% endfor %}
+{% if form %}<h2>Добавить правило</h2><form class="editor" method="post">{% csrf_token %}{{ form.as_p }}<button class="button">Добавить правило</button></form>{% endif %}
+<a href="{% url 'stream-detail' stream.key %}?metric={{ metric }}">Обновить данные</a>
+{% endif %}
+{% endblock %}

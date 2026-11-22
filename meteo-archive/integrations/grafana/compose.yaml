@@ -1,0 +1,22 @@
+name: zapovednik-meteo-monitoring
+
+services:
+  influxdb:
+    image: influxdb:2
+    ports:
+      - "127.0.0.1:8086:8086"
+    volumes:
+      - influx-data:/var/lib/influxdb2
+      - influx-config:/etc/influxdb2
+
+  grafana:
+    image: grafana/grafana:12.4.12
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+
+volumes:
+  influx-data:
+  influx-config:
+  grafana-data:

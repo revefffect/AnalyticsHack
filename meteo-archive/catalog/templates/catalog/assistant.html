@@ -1,0 +1,56 @@
+{% extends "catalog/base.html" %}
+{% block title %}Метеоагент{% endblock %}
+{% block content %}
+<a class="back" href="{{ report|default:'../' }}">← К отчёту</a>
+<header class="section-header"><div><h1>Метеоагент</h1><p>{{ dataset.station }} · {{ dataset.get_source_kind_display }}</p></div></header>
+<form class="report-filters" method="get">
+  <div class="form-grid">
+    <div>{{ form.metric.label_tag }}{{ form.metric }}{{ form.metric.errors }}</div>
+    <div>{{ form.start.label_tag }}{{ form.start }}{{ form.start.errors }}</div>
+    <div>{{ form.end.label_tag }}{{ form.end }}{{ form.end.errors }}</div>
+    <div>{{ form.step.label_tag }}{{ form.step }}{{ form.step.errors }}</div>
+  </div>
+  {{ form.non_field_errors }}
+  <button class="button">Подготовить данные</button>
+</form>
+{% if facts %}
+<section>
+  <h2>Сводка из Метеоархива</h2>
+  <p>{{ facts.metric }}, {{ facts.unit }} · {{ facts.period_start }} — {{ facts.period_end }}</p>
+  <dl class="summary-grid">
+    <div><dt>{{ facts.coverage.metric_days }} из {{ facts.coverage.calendar_days }}</dt><dd>Пригодные дни показателя</dd></div>
+    <div><dt>{{ facts.coverage.station_days }} из {{ facts.coverage.calendar_days }}</dt><dd>Пригодные дни станции</dd></div>
+    <div><dt>{{ facts.periods_with_mean }} из {{ facts.period_count }}</dt><dd>Периоды со средним</dd></div>
+  </dl>
+  {% if metric_code == 'wind_dir' %}
+    <p>Направление ветра — круговая величина. Его распределение показано в отчёте.</p>
+  {% elif not facts.periods_with_mean %}
+    <p>Для выбранного шага среднее отсутствует. Проверьте покрытие и границы календарных периодов в отчёте.</p>
+  {% endif %}
+  {% if facts.excluded_rows_by_reason %}<p>Причины исключения{% for reason, count in facts.excluded_rows_by_reason.items %} · {{ reason }} ({{ count }}){% endfor %}.</p>{% endif %}
+  <p><a href="{{ report }}#qc">Проверить расчёт и исходные строки</a> · <a href="{{ report }}&amp;export=json">Скачать агрегаты JSON</a></p>
+</section>
+<section class="spaced">
+  <h2>Вопрос к ИИ</h2>
+  <details><summary>Посмотреть данные для модели</summary><p>Будут переданы числа и причины исключения по выбранному срезу, максимум 12 последних периодов, и ваш вопрос. Исходный файл остаётся в портале.</p>
+    <pre class="table-wrap">{{ preview }}</pre>
+  </details>
+  {% if model %}
+    <form class="editor" method="post">{% csrf_token %}
+      {% for name, value in scope.items %}<input type="hidden" name="{{ name }}" value="{{ value }}">{% endfor %}
+      {{ question_form.as_p }}
+      <button class="button">Спросить модель</button>
+      <small>Yandex AI Studio · {{ model }}</small>
+    </form>
+  {% else %}
+    <p>Облачная модель ещё не настроена. Выше доступна сводка по выбранным данным.</p>
+  {% endif %}
+  {% if model_error %}<p role="alert">{{ model_error }}</p>{% endif %}
+  {% if answer %}
+    <h3>Черновик от модели</h3>
+    {{ answer|linebreaks }}
+    <p><a href="{{ report }}">Сверить черновик с отчётом</a></p>
+  {% endif %}
+</section>
+{% endif %}
+{% endblock %}
