@@ -9,8 +9,9 @@ services:
       - "443:443"
     environment:
       WEATHER_DOMAIN: ${WEATHER_DOMAIN:?set the public domain}
+      WEATHER_PUBLIC_IP: ${WEATHER_PUBLIC_IP:-}
     volumes:
-      - ./ops/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./ops/${WEATHER_CADDYFILE:-Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy-data:/data
       - caddy-config:/config
   api:

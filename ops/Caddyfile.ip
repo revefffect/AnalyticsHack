@@ -1,0 +1,25 @@
+{
+	default_sni {$WEATHER_PUBLIC_IP}
+	servers {
+		protocols h1 h2
+	}
+}
+
+{$WEATHER_DOMAIN} {
+	encode gzip
+	reverse_proxy api:8000
+}
+
+http://{$WEATHER_PUBLIC_IP} {
+	redir https://{$WEATHER_DOMAIN}{uri} 308
+}
+
+https://{$WEATHER_PUBLIC_IP} {
+	tls {
+		issuer acme {
+			dir https://acme-v02.api.letsencrypt.org/directory
+			profile shortlived
+		}
+	}
+	redir https://{$WEATHER_DOMAIN}{uri} 308
+}
