@@ -1,3 +1,6 @@
+import {mountStationAtlas} from './station-atlas.js';
+import {humanAvatar, mountDatasetSettings} from './dataset-access.js';
+
 const $ = (query, root = document) => root.querySelector(query);
 const $$ = (query, root = document) => [...root.querySelectorAll(query)];
 const content = $('#content');
@@ -11,6 +14,7 @@ const fmt = (value, unit = '') => value == null ? '—' : [number.format(value),
 const query = (values) => new URLSearchParams(values).toString();
 let token = sessionStorage.getItem('meteo-token') || '';
 let account, dict, datasets, selectedDataset, page, currentSlice, drawChart, streamCursor = 0;
+let atlasStationId, disposeStationAtlas;
 const deepLink = new URLSearchParams(location.search);
 let columns = [['period', 'Период'], ['value', 'Значение'], ['coverage', 'Полнота'],
   ['deviation', 'Отклонение'], ['quality', 'Качество']];
@@ -24,7 +28,8 @@ async function api(path, options = {}) {
     const body = await response.json().catch(() => ({}));
     throw new Error(typeof body.detail === 'string' ? body.detail : 'Проверьте введённые значения.');
   }
-  return options.raw ? response : response.json();
+  if (options.raw) return response;
+  return response.status === 204 ? null : response.json();
 }
 
 function message(text = '') {
@@ -55,46 +60,95 @@ async function signIn(value) {
   if (views.default?.length) columns = views.default;
   $('#login').hidden = $('#login-error').hidden = true;
   $('#workspace').hidden = $('#nav').hidden = $('#identity').hidden = false;
+  $('#user-avatar').replaceChildren(humanAvatar(account.name));
+  $('#user-name').textContent = account.name;
   $('#role').textContent = account.role === 'research' ? 'Исследователь' : 'Бизнес';
   $$('[data-research]').forEach(el => { el.hidden = account.role !== 'research'; });
-  await navigate('analysis');
+  if (deepLink.get('page') === 'stations') {
+    atlasStationId = deepLink.get('station');
+    await navigate('stations');
+  } else {
+    await navigate('analysis');
+  }
 }
 
 function signOut() {
+  disposeStationAtlas?.();
+  disposeStationAtlas = undefined;
+  atlasStationId = selectedDataset = page = undefined;
+  content.replaceChildren();
   token = '';
   sessionStorage.removeItem('meteo-token');
   $('#login').hidden = false;
   $('#workspace').hidden = $('#nav').hidden = $('#identity').hidden = true;
 }
 
-async function navigate(next) {
+async function navigate(next, selection) {
+  disposeStationAtlas?.();
+  disposeStationAtlas = undefined;
   page = next;
   currentSlice = undefined;
   drawChart = undefined;
   message();
   actions.replaceChildren();
   content.innerHTML = '<p class="muted">Загрузка…</p>';
-  $('#heading').textContent = {analysis: 'Наблюдения', import: 'Импорт данных', catalog: 'Каталог наборов',
+  $('#heading').textContent = {analysis: 'Наблюдения', stations: 'Карта станций', import: 'Импорт данных', catalog: 'Каталог наборов',
     reports: 'Отчёты', alerts: 'Уведомления', satellite: 'Спутниковые данные'}[page];
   $('#eyebrow').textContent = account.role === 'research' ? 'Кабинет исследователя' : 'Кабинет бизнеса';
   $$('nav button').forEach(el => { el.setAttribute('aria-current', el.dataset.page === page ? 'page' : 'false'); });
-  await {analysis: analysis, import: importPage, catalog: catalogPage, reports: reportsPage, alerts: alertsPage, satellite: satellitePage}[page]();
+  await {analysis, stations: stationPage, import: importPage, catalog: catalogPage, reports: reportsPage, alerts: alertsPage, satellite: satellitePage}[page](selection);
 }
 
-async function analysis() {
-  datasets = await api('/api/datasets');
+async function stationPage() {
+  // A detached host prevents a slower response from overwriting the next page or login.
+  const host = document.createElement('div');
+  host.textContent = 'Загрузка станций…';
+  content.replaceChildren(host);
+  const [local, references] = await Promise.all([api('/api/stations'), api('/api/stations/references')]);
+  if (!host.isConnected) return;
+  disposeStationAtlas = mountStationAtlas(host, [...local, ...references], {
+    initialStation: atlasStationId,
+    onSelectStation: id => { atlasStationId = id; },
+    onOpenDataset(dataset, station) {
+      atlasStationId = station;
+      navigate('analysis', {dataset, station}).catch(error => message(error.message));
+    },
+    async loadPhoto(path, options) {
+      const url = new URL(path, location.origin);
+      if (url.origin !== location.origin || !url.pathname.startsWith('/api/datasets/')) {
+        throw new Error('Недоступный адрес фотографии.');
+      }
+      const result = await api(url.pathname, {...options, raw: true, redirect: 'error'});
+      return result.blob();
+    },
+    async onUploadPhoto(dataset, station, file, credit) {
+      atlasStationId = station;
+      const path = '/api/datasets/' + encodeURIComponent(dataset) + '/stations/' +
+        encodeURIComponent(station) + '/photo?' + query({credit});
+      await api(path, {method: 'PUT', headers: {'Content-Type': file.type}, body: file, raw: true});
+      if (host.isConnected) await navigate('stations');
+    },
+  });
+}
+
+async function analysis(selection) {
+  const initialFilters = selection ? new URLSearchParams(selection) : deepLink;
+  const activeAccount = account;
+  const available = await api('/api/datasets');
+  if (page !== 'analysis' || activeAccount !== account) return;
+  datasets = available;
   if (!datasets.length) {
     content.innerHTML = '<section class="panel"><h2>Нет доступных наборов</h2><p>Откройте каталог или загрузите файл в кабинете исследователя.</p></section>';
     return;
   }
-  selectedDataset = datasets.find(entry => entry.id === (selectedDataset || deepLink.get('dataset')))?.id || datasets[0].id;
+  selectedDataset = datasets.find(entry => entry.id === (selection?.dataset || selectedDataset || initialFilters.get('dataset')))?.id || datasets[0].id;
   content.innerHTML = `<form class="panel" id="filter-form"><div class="filters">
     <label class="wide">Набор<select name="dataset">${options(datasets.map(d => [d.id, d.name]), selectedDataset)}</select></label>
     <label>Станция<select name="station"></select></label>
     <label>Параметр<select name="parameter"></select></label>
     <label>С начала<input name="start" required type="date"></label>
     <label>По конец<input name="end" required type="date"></label>
-    <label>Агрегация<select name="step">${options(Object.entries(dict.periods), deepLink.get('step') || 'month')}</select></label>
+    <label>Агрегация<select name="step">${options(Object.entries(dict.periods), initialFilters.get('step') || 'month')}</select></label>
   </div><div class="actions"><button class="primary">Показать</button><span id="examples"></span></div></form>
   <div id="slice"></div>`;
   const form = $('#filter-form');
@@ -104,20 +158,21 @@ async function analysis() {
     if (!station) return;
     form.start.value = station.start.slice(0, 10);
     form.end.value = station.end.slice(0, 10);
-    if (['KR1', 'KR2'].includes(station.station) && dataset.metadata.territory === 'Урочище Красное') {
+    if (['KR1', 'KR2'].includes(station.station) && dataset.metadata.territory === 'Урочище Красное' &&
+        form.start.value <= '2024-04-01' && form.end.value >= '2024-04-30') {
       form.start.value = '2024-04-01'; form.end.value = '2024-04-30';
     }
-    if (dataset.source === 'stream' && !deepLink.get('step')) form.step.value = 'instant';
+    if (dataset.source === 'stream' && !initialFilters.get('step')) form.step.value = 'instant';
   }
   function setData() {
     selectedDataset = form.elements.dataset.value;
     const dataset = datasets.find(item => item.id === selectedDataset);
     form.station.innerHTML = options(dataset.stations.map(s => [s.station, dict.stations[s.station] || s.station]),
-      deepLink.get('station'));
+      initialFilters.get('station'));
     form.step.innerHTML = options(Object.entries(dict.periods).filter(([key]) => key !== 'instant' || dataset.source === 'stream'),
-      deepLink.get('step') || (dataset.source === 'stream' ? 'instant' : 'month'));
+      initialFilters.get('step') || (dataset.source === 'stream' ? 'instant' : 'month'));
     form.parameter.innerHTML = options(dataset.parameters.map(key => [key, dict.parameters[key].name]),
-      deepLink.get('parameter') || 't_air');
+      initialFilters.get('parameter') || 't_air');
     setRange();
   }
   // Keep access to dataset explicit since HTMLElement.dataset also exists on the form.
@@ -134,8 +189,8 @@ async function analysis() {
     renderSlice(results);
   };
   setData();
-  if (deepLink.get('start') && deepLink.get('end')) {
-    form.start.value = deepLink.get('start'); form.end.value = deepLink.get('end');
+  if (initialFilters.get('start') && initialFilters.get('end')) {
+    form.start.value = initialFilters.get('start'); form.end.value = initialFilters.get('end');
   }
   if (datasets.some(d => d.stations.some(s => s.station === 'AME60') && d.stations.some(s => s.station === 'KR1'))) {
     $('#examples').innerHTML = '<button type="button" id="january">Январь АМЕ‑60</button> <button type="button" id="pressure">Давление Кр1</button>';
@@ -150,7 +205,7 @@ async function analysis() {
   bind(form.elements.dataset, 'change', async () => { setData(); await run(); });
   bind(form.station, 'change', setRange);
   await run();
-  if (deepLink.get('day') && page === 'analysis') await loadQuality(deepLink.get('day'));
+  if (initialFilters.get('day') && page === 'analysis') await loadQuality(initialFilters.get('day'));
 }
 
 const showCoverage = (row) => row.valid_days + ' / ' + row.expected_days + ' сут.';
@@ -244,8 +299,8 @@ function renderSlice(data) {
       <p class="muted">${escape(data.start)} — ${escape(data.end)} · ${escape(data.unit)} · ${escape(dict.periods[data.step])}</p>
       <canvas class="chart" aria-label="График наблюдений. Та же выборка доступна в таблице."></canvas>
       <div class="actions"><span class="muted">Версия <code>${escape(data.dataset.slice(0, 12))}</code></span>
-      <button id="grafana">Grafana</button><button id="satellite-at">Снимок на дату</button>${selected?.owner === account.name && account.role === 'research' ?
-        '<button id="share">' + (selected.visibility === 'shared' ? 'Закрыть доступ' : 'Открыть доступ кабинету бизнеса') + '</button>' : ''}
+      <button id="grafana">Grafana</button><button id="satellite-at">Снимок на дату</button>${selected?.can_manage_access ?
+        '<button id="share">' + (selected.visibility === 'shared' ? 'Выключить общее чтение' : 'Разрешить чтение всем в кабинете') + '</button>' : ''}
       ${selected?.source !== 'stream' ? '<button id="raw">Исходный файл</button>' : ''}</div>
     </section>
     <div class="layout">
@@ -400,9 +455,13 @@ async function catalogPage() {
   content.innerHTML = `<form class="panel" id="catalog-search"><div class="filters"><label>Поиск по каталогу
     <input name="search" type="search" placeholder="Поставщик, станция, параметр"></label><button class="primary">Найти</button></div></form>
     <div class="cards" id="catalog-list"></div>`;
+  const list = $('#catalog-list');
+  let requestNumber = 0;
   const render = async (q = '') => {
+    const request = ++requestNumber;
     const cards = await api('/api/catalog?' + query({q}));
-    $('#catalog-list').innerHTML = cards.map(card => `<article class="panel metric">
+    if (!list.isConnected || request !== requestNumber) return;
+    list.innerHTML = cards.map(card => `<article class="panel metric">
       <span class="tag">${escape(card.type || card.metadata?.type || (card.source === 'stream' ? 'Поток' : 'Наблюдения'))}</span>
       <h3>${escape(card.name)}</h3><p>${escape(card.provider || card.metadata?.provider || card.owner)}</p>
       <p class="muted">${escape(card.territory || card.metadata?.territory)} · ${escape(card.cadence || card.metadata?.cadence || '—')} ·
@@ -410,14 +469,33 @@ async function catalogPage() {
       <p>${escape(card.coverage || card.stations?.map(s => s.station + ' ' + s.start.slice(0, 10) + ' — ' + s.end.slice(0, 10)).join('; '))}</p>
       <p>${escape(typeof card.parameters === 'string' ? card.parameters : card.parameters?.map(key => dict.parameters[key]?.name).join(', '))}</p>
       <p class="muted">${escape(card.license || card.metadata?.license || 'Условия задаёт владелец')}</p>
-      ${card.row_count ? '<small>Строк: ' + fmt(card.row_count) + ' · ' + escape(card.visibility) + ' · ' + escape(card.id.slice(0, 12)) +
+      ${card.row_count ? '<small>Строк: ' + fmt(card.row_count) + ' · ' + '<span class="dataset-visibility">' + (card.visibility === 'shared' ? 'Общее чтение' : 'По приглашению') +
+          '</span> · ' + escape(card.id.slice(0, 12)) +
           ' · ' + escape(card.created_at) + '</small>' : ''}
       ${card.url ? '<p>' + escape(card.status) + '</p><a href="' + escape(card.url) + '" target="_blank" rel="noopener">Источник</a>' : ''}
       ${card.instructions ? '<p>' + escape(card.instructions) + '</p>' : ''}
       ${card.id === 'open-meteo' && account.role === 'research' ? '<button id="external">Подключить Open-Meteo</button>' : ''}
       ${card.stations ? '<div class="actions"><button data-open="' + escape(card.id) + '">Открыть</button><button data-connect="' +
         escape(card.id) + '">' + (card.connected ? 'Подключён' : 'Подключить') + '</button></div>' : ''}
+      ${card.can_edit || card.can_manage_access ? '<button type="button" aria-expanded="false" data-settings="' +
+        escape(card.id) + '">' + (card.can_manage_access ? 'Настройки и доступ' : 'Редактировать набор') +
+        '</button><div class="dataset-settings-host" hidden></div>' : ''}
       </article>`).join('') || '<p>Ничего не найдено.</p>';
+    $$('[data-settings]', list).forEach(button => bind(button, 'click', () => {
+      const host = button.nextElementSibling;
+      host.hidden = !host.hidden;
+      button.setAttribute('aria-expanded', String(!host.hidden));
+      if (host.hidden) return;
+      const card = cards.find(item => item.id === button.dataset.settings);
+      return mountDatasetSettings(host, card, api, {onRename(name) {
+        card.name = name;
+        $('h3', button.closest('article')).textContent = name;
+      }, onVisibility(visibility) {
+        card.visibility = visibility;
+        const label = $('.dataset-visibility', button.closest('article'));
+        if (label) label.textContent = visibility === 'shared' ? 'Общее чтение' : 'По приглашению';
+      }});
+    }));
     $$('[data-open]').forEach(button => bind(button, 'click', () => {
       selectedDataset = button.dataset.open; return navigate('analysis');
     }));

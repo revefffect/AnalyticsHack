@@ -6,6 +6,8 @@
   <meta name="theme-color" content="#112b2a">
   <title>Метеоархив · AnalyticsHack</title>
   <link rel="stylesheet" href="/assets/style.css">
+  <link rel="stylesheet" href="/assets/station-atlas.css">
+  <link rel="stylesheet" href="/assets/dataset-access.css">
   <script type="module" src="/assets/app.js"></script>
 </head>
 <body>
@@ -13,13 +15,14 @@
     <a class="brand" href="/"><span class="brand-icon" aria-hidden="true">◉</span><span>Метеоархив<small>AnalyticsHack</small></span></a>
     <nav id="nav" aria-label="Кабинет" hidden>
       <button data-page="analysis">Наблюдения</button>
+      <button data-page="stations">Карта станций</button>
       <button data-page="import" data-research>Импорт данных</button>
       <button data-page="catalog">Каталог</button>
       <button data-page="satellite">Спутник</button>
       <button data-page="reports">Отчёты</button>
       <button data-page="alerts">Уведомления</button>
     </nav>
-    <div class="identity" id="identity" hidden><span id="role"></span><button id="logout">Выйти</button></div>
+    <div class="identity" id="identity" hidden><div class="account-profile"><span id="user-avatar"></span><span><strong id="user-name"></strong><small id="role"></small></span></div><button id="logout">Выйти</button></div>
   </aside>
   <main id="main">
     <section id="login" class="login" hidden>

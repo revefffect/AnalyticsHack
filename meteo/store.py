@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from hashlib import sha256
 from pathlib import Path
 import sqlite3
+from time import monotonic, sleep
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS datasets (
@@ -52,6 +53,37 @@ CREATE TABLE IF NOT EXISTS alert_events (
 );
 """
 
+SCHEMA_V2 = """
+CREATE TABLE IF NOT EXISTS station_photos (
+    dataset TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE, station TEXT NOT NULL,
+    credit TEXT NOT NULL, media_type TEXT NOT NULL, image BLOB NOT NULL,
+    PRIMARY KEY (dataset, station)
+)
+"""
+
+
+SCHEMA_V3 = """
+CREATE TABLE IF NOT EXISTS dataset_members (
+    dataset TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+    username TEXT NOT NULL,
+    role TEXT NOT NULL CHECK(role IN ('reader','editor')),
+    PRIMARY KEY (dataset, username)
+)
+"""
+
+
+def enable_wal(db):
+    # Changing journal mode can return SQLITE_BUSY immediately during simultaneous starts.
+    deadline = monotonic() + 60
+    while True:
+        try:
+            db.execute('PRAGMA journal_mode=WAL')
+            return
+        except sqlite3.OperationalError as exc:
+            if (exc.sqlite_errorcode & 0xff) != sqlite3.SQLITE_BUSY or monotonic() >= deadline:
+                raise
+            sleep(0.05)
+
 
 class Store:
     def __init__(self, root):
@@ -60,9 +92,21 @@ class Store:
         self.raw.mkdir(parents=True, exist_ok=True)
         self.db = self.root / 'meteo.sqlite3'
         with self.connect() as db:
-            db.execute('PRAGMA journal_mode=WAL')
-            db.executescript(SCHEMA)
-            db.execute('PRAGMA user_version=1')
+            if db.execute('PRAGMA user_version').fetchone()[0] >= 3:
+                return
+            enable_wal(db)
+            db.execute('BEGIN IMMEDIATE')
+            version = db.execute('PRAGMA user_version').fetchone()[0]
+            if version < 1:
+                # executescript commits an active transaction before running the script.
+                for statement in SCHEMA.split(';'):
+                    if statement.strip():
+                        db.execute(statement)
+            if version < 2:
+                db.execute(SCHEMA_V2)
+            if version < 3:
+                db.execute(SCHEMA_V3)
+                db.execute('PRAGMA user_version=3')
 
     @contextmanager
     def connect(self, *, write=False):

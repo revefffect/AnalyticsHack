@@ -11,6 +11,7 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
+from meteo.access import READABLE_DATASETS
 from meteo.importer import FIELDS, INSERT, PARAMETERS, QC_VERSION, SCHEMA_VERSION, canonical, normalize
 
 FEED = 'stream-reserve'
@@ -185,9 +186,10 @@ def notifications(store, user, demo):
         for row in db.execute('SELECT * FROM alert_events ORDER BY happened_at DESC LIMIT 1000'):
             if row['rule'] in allowed and len(events) < 50:
                 events.append(dict(row, body=json.loads(row['body'])))
-        dataset = db.execute('SELECT * FROM datasets WHERE id=?', (FEED,)).fetchone()
+        dataset = db.execute(f'SELECT * FROM ({READABLE_DATASETS}) WHERE id=:id',
+                             {'username': user, 'id': FEED}).fetchone()
         feed = None
-        if dataset and (dataset['visibility'] == 'shared' or dataset['owner'] == user):
+        if dataset:
             newest = db.execute('SELECT MAX(received_at) FROM stream_messages WHERE feed=?', (FEED,)).fetchone()[0]
             feed = {'id': FEED, 'mode': json.loads(dataset['metadata'])['mode'], 'last_received': newest}
     return {'rules': rules, 'events': events, 'feed': feed, 'demo': demo}

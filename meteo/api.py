@@ -9,17 +9,21 @@ import json
 import os
 from pathlib import Path
 import secrets
+from typing import Literal
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.concurrency import run_in_threadpool
 from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
+from meteo.access import READABLE_DATASETS, pick_dataset
 from meteo.analytics import PERIODS, QC_REASONS, day_detail, describe_dataset, slice_data
+from meteo.atlas import reference_stations, station_catalog
 from meteo.connectors import WeatherRequest, open_meteo
 from meteo.grafana import dashboard_url, provision, shared_dataset
 from meteo.satellite import imagery, options as satellite_options
+from meteo.station_photos import register_station_photos
 from meteo.stream import FEED, Message, Rule, dispatch, evaluate, ingest, notifications, save_rule
 from meteo.importer import FIELDS, PARAMETERS, STATIONS, canonical, import_upload, preview
 from meteo.store import Store
@@ -78,29 +82,28 @@ class ViewOptions(BaseModel):
     columns: list[tuple[str, str]] = Field(max_length=12)
 
 
+class Membership(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    role: Literal['reader', 'editor']
+
+
+class DatasetName(BaseModel):
+    model_config = ConfigDict(extra='forbid', str_strip_whitespace=True)
+    name: str = Field(min_length=1, max_length=160)
+
+
 def seed(store):
     digest = store.save_blob('research', ARCHIVE.name, ARCHIVE.read_bytes())
     info = import_upload(store, 'research', digest, name=ARCHIVE_NAME, metadata=ARCHIVE_META)
-    with store.connect(write=True) as db:
-        db.execute("UPDATE datasets SET visibility='shared' WHERE id=?", (info['id'],))
+    if not info['reused']:
+        with store.connect(write=True) as db:
+            db.execute("UPDATE datasets SET visibility='shared' WHERE id=?", (info['id'],))
     return info
 
 
-def can_read(dataset, user):
-    return dataset['owner'] == user['name'] or dataset['visibility'] == 'shared'
-
-
-def pick_dataset(db, version, user):
-    dataset = db.execute('SELECT * FROM datasets WHERE id=?', (version,)).fetchone()
-    if dataset is None:
-        raise HTTPException(404, 'Набор недоступен')
-    permissions = dataset
-    if dataset['source'] == 'stream_snapshot':
-        source = json.loads(dataset['metadata'])['source_dataset']
-        permissions = db.execute('SELECT * FROM datasets WHERE id=?', (source,)).fetchone()
-    if permissions is None or not can_read(permissions, user):
-        raise HTTPException(404, 'Набор недоступен')
-    return dataset
+def dataset_card(db, dataset):
+    return {**describe_dataset(db, dataset), 'can_edit': bool(dataset['can_edit']),
+            'can_manage_access': bool(dataset['can_manage_access'])}
 
 
 def get_accounts(config, demo):
@@ -128,9 +131,10 @@ def create_app(root=None, *, demo=None, accounts=None):
             await run_in_threadpool(feed_tick)
 
     @asynccontextmanager
-    async def lifespan(_app):
+    async def lifespan(app):
         if demo:
-            await run_in_threadpool(seed, current_store())
+            archive = await run_in_threadpool(seed, current_store())
+            app.state.archive_version = archive['id']
         task = asyncio.create_task(schedule())
         try:
             yield
@@ -160,6 +164,8 @@ def create_app(root=None, *, demo=None, accounts=None):
             raise HTTPException(403, 'Действие доступно исследователю')
         return user
 
+    register_station_photos(app, current_store, actor)
+
     @app.exception_handler(ValueError)
     async def bad_input(_request, exc):
         return Response(json.dumps({'detail': str(exc)}, ensure_ascii=False),
@@ -187,18 +193,27 @@ def create_app(root=None, *, demo=None, accounts=None):
     @app.get('/api/datasets')
     def datasets(user=Depends(actor)):
         with current_store().connect() as db:
-            rows = db.execute("""
-                SELECT * FROM datasets WHERE (owner=? OR visibility='shared')
-                AND source!='stream_snapshot' ORDER BY created_at DESC, name
-            """, (user['name'],)).fetchall()
-            return [describe_dataset(db, row) for row in rows]
+            rows = db.execute(f"""SELECT * FROM ({READABLE_DATASETS})
+                WHERE source!='stream_snapshot' ORDER BY created_at DESC, name
+            """, {'username': user['name']})
+            return [dataset_card(db, row) for row in rows]
+
+    @app.get('/api/stations')
+    def stations(user=Depends(actor)):
+        with current_store().connect() as db:
+            return station_catalog(db, user)
+
+    @app.get('/api/stations/references', dependencies=[Depends(actor)])
+    def station_references():
+        return reference_stations()
 
     @app.get('/api/catalog')
     def catalog(q: str = '', user=Depends(actor)):
         with current_store().connect() as db:
             connected = {r['dataset'] for r in db.execute('SELECT dataset FROM subscriptions WHERE owner=?',
                                                           (user['name'],))}
-        cards = [*CATALOG, *(dict(data, connected=data['id'] in connected) for data in datasets(user))]
+        cards = [*(dict(source, can_edit=False, can_manage_access=False) for source in CATALOG),
+                 *(dict(data, connected=data['id'] in connected) for data in datasets(user))]
         return [card for card in cards if q.casefold() in canonical(card).casefold()]
 
     @app.post('/api/datasets/{version}/connect')
@@ -209,16 +224,53 @@ def create_app(root=None, *, demo=None, accounts=None):
         return {'connected': True}
 
     @app.put('/api/datasets/{version}/visibility')
-    def visibility(version: str, shared: bool, jobs: BackgroundTasks, user=Depends(researcher)):
+    def visibility(version: str, shared: bool, jobs: BackgroundTasks, user=Depends(actor)):
         with current_store().connect(write=True) as db:
-            dataset = pick_dataset(db, version, user)
-            if dataset['owner'] != user['name'] or dataset['source'] == 'stream_snapshot':
-                raise HTTPException(404, 'Набор недоступен')
+            dataset = pick_dataset(db, version, user, permission='manage')
             state = 'shared' if shared else 'private'
             db.execute('UPDATE datasets SET visibility=? WHERE id=?', (state, version))
             if shared and shared_dataset(db, version) is not None:
                 jobs.add_task(provision, describe_dataset(db, dataset))
         return {'visibility': state}
+
+    @app.get('/api/datasets/{version}/members')
+    def members(version: str, user=Depends(actor)):
+        with current_store().connect() as db:
+            dataset = pick_dataset(db, version, user, permission='manage')
+            rows = db.execute('SELECT username,role FROM dataset_members WHERE dataset=? ORDER BY username', (version,))
+            return {'owner': dataset['owner'], 'members': [dict(row) for row in rows],
+                    'candidates': sorted(name for name in accounts if name != dataset['owner'])}
+
+    @app.put('/api/datasets/{version}/members/{username}')
+    def grant(version: str, username: str, request: Membership, user=Depends(actor)):
+        with current_store().connect(write=True) as db:
+            dataset = pick_dataset(db, version, user, permission='manage')
+            if username == dataset['owner'] or username not in accounts:
+                raise ValueError('Выберите существующего участника, кроме владельца')
+            db.execute('''INSERT INTO dataset_members(dataset,username,role) VALUES(?,?,?)
+                          ON CONFLICT(dataset,username) DO UPDATE SET role=excluded.role''',
+                       (version, username, request.role))
+        return {'username': username, 'role': request.role}
+
+    @app.delete('/api/datasets/{version}/members/{username}', status_code=204)
+    def revoke(version: str, username: str, user=Depends(actor)):
+        with current_store().connect(write=True) as db:
+            dataset = pick_dataset(db, version, user, permission='manage')
+            if username == dataset['owner']:
+                raise ValueError('Нельзя отозвать доступ у владельца')
+            removed = db.execute('DELETE FROM dataset_members WHERE dataset=? AND username=?', (version, username))
+            if username not in accounts and not removed.rowcount:
+                raise ValueError('Участник не найден')
+        return Response(status_code=204)
+
+    @app.patch('/api/datasets/{version}')
+    def rename(version: str, request: DatasetName, user=Depends(actor)):
+        with current_store().connect(write=True) as db:
+            pick_dataset(db, version, user, permission='edit')
+            if not request.name.isprintable():
+                raise ValueError('Укажите название набора одной строкой')
+            db.execute('UPDATE datasets SET name=? WHERE id=?', (request.name, version))
+            return dataset_card(db, pick_dataset(db, version, user))
 
     @app.post('/api/uploads')
     async def upload(request: Request, filename: str, user=Depends(researcher)):
@@ -310,13 +362,11 @@ def create_app(root=None, *, demo=None, accounts=None):
     @app.get('/api/reports')
     def report_list(user=Depends(actor)):
         with current_store().connect() as db:
-            ids = db.execute("""
+            ids = db.execute(f"""
                 SELECT r.id, r.created_at, json_extract(r.body, '$.title') AS title, r.dataset
-                FROM reports r JOIN datasets d ON r.dataset=d.id
-                LEFT JOIN datasets base ON base.id=json_extract(d.metadata,'$.source_dataset')
-                WHERE r.owner=? AND (COALESCE(base.owner,d.owner)=?
-                OR COALESCE(base.visibility,d.visibility)='shared') ORDER BY r.created_at DESC
-            """, (user['name'], user['name']))
+                FROM reports r JOIN ({READABLE_DATASETS}) d ON r.dataset=d.id
+                WHERE r.owner=:username ORDER BY r.created_at DESC
+            """, {'username': user['name']})
             return [dict(row) for row in ids]
 
     @app.post('/api/datasets/{version}/reports')
@@ -441,8 +491,7 @@ def create_app(root=None, *, demo=None, accounts=None):
         save_rule(store, 'research', Rule(name='Тёплый период · архив Кр1', station='KR1', parameter='t_air',
                   threshold=20, minutes=0, coverage=1, recipient='business'))
         with store.connect() as db:
-            dataset = db.execute("SELECT id FROM datasets WHERE raw_hash IS NOT NULL AND name=? ORDER BY created_at LIMIT 1",
-                                 (ARCHIVE_NAME,)).fetchone()
+            dataset = pick_dataset(db, app.state.archive_version, user)
             rising = db.execute("""
                 SELECT stamp, original_stamp, source_file, source_row, json_extract(values_json,'$.t_air') AS value
                 FROM observations WHERE dataset=? AND station='KR1' AND stamp LIKE '2024-07-%'
